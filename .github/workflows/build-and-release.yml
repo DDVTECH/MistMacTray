@@ -1,0 +1,224 @@
+name: Build and Release MistTray
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  XCODE_PROJECT: MistTray.xcodeproj
+  XCODE_SCHEME: MistTray
+  APP_NAME: MistTray
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+          
+      - name: Import Code Signing Certificates
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
+          p12-password: ${{ secrets.CERTIFICATES_P12_PASSWORD }}
+          
+      - name: Install Apple Certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # Import certificate from secrets
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode --output $CERTIFICATE_PATH
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate to keychain
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Build Archive
+        run: |
+          xcodebuild -project "$XCODE_PROJECT" \
+                     -scheme "$XCODE_SCHEME" \
+                     -configuration Release \
+                     -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
+                     archive
+                     
+      - name: Export App
+        run: |
+          cat > "$RUNNER_TEMP/exportOptions.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>developer-id</string>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>teamID</key>
+              <string>${{ secrets.TEAM_ID }}</string>
+              <key>signingCertificate</key>
+              <string>Developer ID Application</string>
+              <key>provisioningProfiles</key>
+              <dict/>
+          </dict>
+          </plist>
+          EOF
+          
+          xcodebuild -exportArchive \
+                     -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
+                     -exportPath "$RUNNER_TEMP" \
+                     -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist"
+
+      - name: Code Sign App
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        run: |
+          codesign --deep --force --verify --verbose \
+                   --sign "Developer ID Application: $DEVELOPER_ID" \
+                   --options runtime \
+                   "$RUNNER_TEMP/$APP_NAME.app"
+          
+          # Verify signing
+          codesign --verify --verbose=2 "$RUNNER_TEMP/$APP_NAME.app"
+          spctl -a -vvv "$RUNNER_TEMP/$APP_NAME.app"
+
+      - name: Create ZIP for Notarization
+        run: |
+          cd "$RUNNER_TEMP"
+          ditto -c -k --keepParent "$APP_NAME.app" "$APP_NAME-temp.zip"
+
+      - name: Notarize App
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          # Submit for notarization
+          xcrun notarytool submit "$RUNNER_TEMP/$APP_NAME-temp.zip" \
+                                  --apple-id "$APPLE_ID" \
+                                  --password "$APP_SPECIFIC_PASSWORD" \
+                                  --team-id "$TEAM_ID" \
+                                  --wait
+          
+          # Staple the notarization
+          xcrun stapler staple "$RUNNER_TEMP/$APP_NAME.app"
+          
+          # Verify stapling
+          xcrun stapler validate "$RUNNER_TEMP/$APP_NAME.app"
+
+      - name: Create Distribution Packages
+        run: |
+          cd "$RUNNER_TEMP"
+          
+          # Get version from tag or generate one
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="dev-$(date +%Y%m%d-%H%M%S)"
+          fi
+          
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          
+          # 1. Create ZIP for Homebrew (fast download)
+          ditto -c -k --keepParent "$APP_NAME.app" "$APP_NAME-$VERSION.zip"
+          
+          # 2. Create DMG for direct download (nice UX)
+          # Create a temporary directory for DMG contents
+          mkdir dmg_temp
+          cp -R "$APP_NAME.app" dmg_temp/
+          
+          # Create a symbolic link to Applications
+          ln -s /Applications dmg_temp/Applications
+          
+          # Create the DMG
+          hdiutil create -volname "$APP_NAME" \
+                         -srcfolder dmg_temp \
+                         -ov -format UDZO \
+                         -imagekey zlib-level=9 \
+                         "$APP_NAME-$VERSION.dmg"
+          
+          # Calculate checksums
+          shasum -a 256 "$APP_NAME-$VERSION.zip" > "$APP_NAME-$VERSION.zip.sha256"
+          shasum -a 256 "$APP_NAME-$VERSION.dmg" > "$APP_NAME-$VERSION.dmg.sha256"
+          
+          # List created files
+          ls -la *.zip *.dmg *.sha256
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: MistTray ${{ env.VERSION }}
+          draft: false
+          prerelease: ${{ contains(env.VERSION, 'beta') || contains(env.VERSION, 'alpha') || contains(env.VERSION, 'dev') }}
+          files: |
+            ${{ runner.temp }}/MistTray-${{ env.VERSION }}.zip
+            ${{ runner.temp }}/MistTray-${{ env.VERSION }}.dmg
+            ${{ runner.temp }}/MistTray-${{ env.VERSION }}.zip.sha256
+            ${{ runner.temp }}/MistTray-${{ env.VERSION }}.dmg.sha256
+          body: |
+            ## Installation Options
+            
+            ### 🍺 Homebrew (Recommended)
+            ```bash
+            # One tap for the complete MistServer ecosystem
+            brew tap ddvtech/mistserver
+            
+            # Install MistServer (streaming engine) 
+            brew install mistserver
+            
+            # Install MistTray (GUI management)
+            brew install --cask mistmactray
+            ```
+            
+            ### 📦 Direct Download
+            Download `MistTray-${{ env.VERSION }}.dmg` below and drag to Applications folder.
+            
+            ### 📋 Checksums
+            - ZIP: See `MistTray-${{ env.VERSION }}.zip.sha256`
+            - DMG: See `MistTray-${{ env.VERSION }}.dmg.sha256`
+            
+            ## What's Changed
+            
+            - Improved stability and performance
+            - Updated dependencies
+            - Bug fixes and enhancements
+            
+            **Full Changelog**: https://github.com/${{ github.repository }}/compare/v${{ env.PREVIOUS_VERSION }}...${{ env.VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # Clean up temporary keychain
+          if [ -f "$RUNNER_TEMP/app-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db"
+          fi
+          
+          # Clean up temporary files
+          rm -f "$RUNNER_TEMP/build_certificate.p12"
+          rm -f "$RUNNER_TEMP/exportOptions.plist" 
