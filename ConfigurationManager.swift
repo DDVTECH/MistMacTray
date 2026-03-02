@@ -13,16 +13,16 @@ class ConfigurationManager {
   // MARK: - Configuration Operations
 
   func loadConfiguration(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    print("📥 Loading configuration from server...")
+    print("Loading configuration from server...")
 
     APIClient.shared.fetchConfiguration { result in
       DispatchQueue.main.async {
         switch result {
         case .success(let config):
-          print("✅ Configuration loaded successfully")
+          print("Configuration loaded successfully")
           completion(.success(config))
         case .failure(let error):
-          print("❌ Failed to load configuration: \(error)")
+          print("Failed to load configuration: \(error)")
           completion(.failure(error))
         }
       }
@@ -30,16 +30,16 @@ class ConfigurationManager {
   }
 
   func saveConfiguration(completion: @escaping (Result<Void, APIError>) -> Void) {
-    print("💾 Saving configuration to server...")
+    print("Saving configuration to server...")
 
     APIClient.shared.saveConfiguration { result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Configuration saved successfully")
+          print("Configuration saved successfully")
           completion(.success(()))
         case .failure(let error):
-          print("❌ Failed to save configuration: \(error)")
+          print("Failed to save configuration: \(error)")
           completion(.failure(error))
         }
       }
@@ -47,7 +47,7 @@ class ConfigurationManager {
   }
 
   func backupConfiguration(to url: URL, completion: @escaping (Result<Void, Error>) -> Void) {
-    print("📦 Backing up configuration to: \(url.path)")
+    print("Backing up configuration to: \(url.path)")
 
     APIClient.shared.backupConfiguration { result in
       switch result {
@@ -56,18 +56,18 @@ class ConfigurationManager {
           let jsonData = try JSONSerialization.data(
             withJSONObject: configData, options: .prettyPrinted)
           try jsonData.write(to: url)
-          print("✅ Configuration backup saved successfully")
+          print("Configuration backup saved successfully")
           DispatchQueue.main.async {
             completion(.success(()))
           }
         } catch {
-          print("❌ Failed to write backup file: \(error)")
+          print("Failed to write backup file: \(error)")
           DispatchQueue.main.async {
             completion(.failure(error))
           }
         }
       case .failure(let error):
-        print("❌ Failed to backup configuration: \(error)")
+        print("Failed to backup configuration: \(error)")
         DispatchQueue.main.async {
           completion(.failure(error))
         }
@@ -76,7 +76,7 @@ class ConfigurationManager {
   }
 
   func restoreConfiguration(from url: URL, completion: @escaping (Result<Void, Error>) -> Void) {
-    print("📥 Restoring configuration from: \(url.path)")
+    print("Restoring configuration from: \(url.path)")
 
     do {
       let jsonData = try Data(contentsOf: url)
@@ -91,16 +91,16 @@ class ConfigurationManager {
         DispatchQueue.main.async {
           switch result {
           case .success:
-            print("✅ Configuration restored successfully")
+            print("Configuration restored successfully")
             completion(.success(()))
           case .failure(let error):
-            print("❌ Failed to restore configuration: \(error)")
+            print("Failed to restore configuration: \(error)")
             completion(.failure(error))
           }
         }
       }
     } catch {
-      print("❌ Failed to read backup file: \(error)")
+      print("Failed to read backup file: \(error)")
       completion(.failure(error))
     }
   }
@@ -108,7 +108,7 @@ class ConfigurationManager {
   func processConfigurationExport(
     _ configData: [String: Any], to url: URL, completion: @escaping (Result<Void, Error>) -> Void
   ) {
-    print("📤 Exporting configuration with metadata...")
+    print("Exporting configuration with metadata...")
 
     let exportData: [String: Any] = [
       "export_timestamp": ISO8601DateFormatter().string(from: Date()),
@@ -119,10 +119,10 @@ class ConfigurationManager {
     do {
       let jsonData = try JSONSerialization.data(withJSONObject: exportData, options: .prettyPrinted)
       try jsonData.write(to: url)
-      print("✅ Configuration exported successfully")
+      print("Configuration exported successfully")
       completion(.success(()))
     } catch {
-      print("❌ Failed to export configuration: \(error)")
+      print("Failed to export configuration: \(error)")
       completion(.failure(error))
     }
   }
@@ -141,14 +141,7 @@ class ConfigurationManager {
   }
 
   func performFactoryReset(completion: @escaping (Result<Void, APIError>) -> Void) {
-    print("🏭 Performing factory reset...")
-
-    // Confirm with user first
-    let confirmed = DialogManager.shared.confirmFactoryReset()
-    guard confirmed else {
-      completion(.failure(.invalidRequest))
-      return
-    }
+    print("Performing factory reset...")
 
     // Perform factory reset by restoring empty configuration
     let emptyConfig: [String: Any] = [:]
@@ -156,10 +149,10 @@ class ConfigurationManager {
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Factory reset completed successfully")
+          print("Factory reset completed successfully")
           completion(.success(()))
         case .failure(let error):
-          print("❌ Factory reset failed: \(error)")
+          print("Factory reset failed: \(error)")
           completion(.failure(error))
         }
       }
@@ -174,12 +167,12 @@ class ConfigurationManager {
 
     for section in requiredSections {
       if config[section] == nil {
-        print("⚠️ Configuration missing required section: \(section)")
+        print("Configuration missing required section: \(section)")
         return false
       }
     }
 
-    print("✅ Configuration validation passed")
+    print("Configuration validation passed")
     return true
   }
 

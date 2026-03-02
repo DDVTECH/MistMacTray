@@ -140,14 +140,14 @@ class DialogManager {
     mainStack.translatesAutoresizingMaskIntoConstraints = false
 
     // Stream Name Section
-    let nameSection = createFormSection(title: "📺 Stream Name", required: true)
+    let nameSection = createFormSection(title: "Stream Name", required: true)
     let nameField = NSTextField()
     nameField.placeholderString = "Enter stream name (e.g., 'camera1', 'livestream')"
     nameSection.addArrangedSubview(nameField)
     mainStack.addArrangedSubview(nameSection)
 
     // Source Section
-    let sourceSection = createFormSection(title: "📡 Source", required: true)
+    let sourceSection = createFormSection(title: "Source", required: true)
     let sourceField = NSTextField()
     sourceField.placeholderString = "rtmp://source.example.com/live/stream or /path/to/file.mp4"
     sourceSection.addArrangedSubview(sourceField)
@@ -230,7 +230,7 @@ class DialogManager {
     mainStack.translatesAutoresizingMaskIntoConstraints = false
 
     // Source Section
-    let sourceSection = createFormSection(title: "📡 Source", required: true)
+    let sourceSection = createFormSection(title: "Source", required: true)
     let sourceField = NSTextField()
     sourceField.stringValue = currentConfig["source"] as? String ?? ""
     sourceField.placeholderString = "rtmp://source.example.com/live/stream or /path/to/file.mp4"
@@ -319,7 +319,7 @@ class DialogManager {
     mainStack.translatesAutoresizingMaskIntoConstraints = false
 
     // Stream Selection
-    let streamSection = createFormSection(title: "📺 Source Stream", required: true)
+    let streamSection = createFormSection(title: "Source Stream", required: true)
     let streamPopup = NSPopUpButton()
     streamPopup.addItems(
       withTitles: availableStreams.isEmpty ? ["No streams available"] : availableStreams)
@@ -328,7 +328,7 @@ class DialogManager {
     mainStack.addArrangedSubview(streamSection)
 
     // Target URL
-    let targetSection = createFormSection(title: "🎯 Target URL", required: true)
+    let targetSection = createFormSection(title: "Target URL", required: true)
     let targetField = NSTextField()
     targetField.placeholderString = "rtmp://live.example.com/live/streamkey"
     targetSection.addArrangedSubview(targetField)
@@ -441,7 +441,7 @@ class DialogManager {
     let response = alert.runModal()
 
     guard response == .alertFirstButtonReturn else {
-      print("🚫 Protocol configuration cancelled by user")
+      print("Protocol configuration cancelled by user")
       completion(nil)
       return
     }
@@ -484,7 +484,7 @@ class DialogManager {
     mainStack.translatesAutoresizingMaskIntoConstraints = false
 
     // Auto-update Section
-    let autoUpdateSection = createFormSection(title: "🔄 Auto-Update Settings", required: false)
+    let autoUpdateSection = createFormSection(title: "Auto-Update Settings", required: false)
     let autoUpdateCheckbox = NSButton(
       checkboxWithTitle: "Enable automatic updates", target: nil, action: nil)
     autoUpdateCheckbox.state = currentSettings.autoUpdateEnabled ? .on : .off
@@ -500,7 +500,7 @@ class DialogManager {
     mainStack.addArrangedSubview(autoUpdateSection)
 
     // Startup Section
-    let startupSection = createFormSection(title: "🚀 Startup Settings", required: false)
+    let startupSection = createFormSection(title: "Startup Settings", required: false)
     let startupCheckbox = NSButton(
       checkboxWithTitle: "Start MistServer automatically on app launch", target: nil, action: nil)
     startupCheckbox.state = currentSettings.startServerOnLaunch ? .on : .off
@@ -508,7 +508,7 @@ class DialogManager {
     mainStack.addArrangedSubview(startupSection)
 
     // Notification Section
-    let notificationSection = createFormSection(title: "🔔 Notifications", required: false)
+    let notificationSection = createFormSection(title: "Notifications", required: false)
     let notificationCheckbox = NSButton(
       checkboxWithTitle: "Show notifications for server events", target: nil, action: nil)
     notificationCheckbox.state = currentSettings.showNotifications ? .on : .off
@@ -604,7 +604,7 @@ class DialogManager {
             tagView.orientation = .horizontal
             tagView.spacing = 8
 
-            let tagLabel = NSTextField(labelWithString: "🏷️ \(tag)")
+            let tagLabel = NSTextField(labelWithString: "Tag: \(tag)")
             tagLabel.font = NSFont.systemFont(ofSize: 11)
 
             tagView.addArrangedSubview(tagLabel)
@@ -702,7 +702,7 @@ class DialogManager {
     let response = alert.runModal()
 
     guard response == .alertFirstButtonReturn else {
-      print("🚫 Stream tag addition cancelled by user")
+      print("Stream tag addition cancelled by user")
       completion(nil)
       return
     }
@@ -875,7 +875,7 @@ class DialogManager {
     let response = alert.runModal()
 
     guard response == .alertFirstButtonReturn else {
-      print("🚫 Auto-push rule creation cancelled by user")
+      print("Auto-push rule creation cancelled by user")
       completion(nil, nil)
       return
     }
@@ -925,11 +925,11 @@ class DialogManager {
     let textView = NSTextView()
 
     // Format statistics
-    var statsText = "📊 MistServer Enhanced Statistics\n"
+    var statsText = "MistServer Enhanced Statistics\n"
     statsText += String(repeating: "=", count: 50) + "\n\n"
 
     if let totals = serverStats["totals"] as? [String: Any] {
-      statsText += "🖥️ Server Totals:\n"
+      statsText += "Server Totals:\n"
       statsText += "  • Total Clients: \(totals["clients"] ?? 0)\n"
       statsText +=
         "  • Total Bandwidth: \(UtilityManager.shared.formatBandwidth(totals["bps_out"] as? Int ?? 0))\n"
@@ -939,13 +939,13 @@ class DialogManager {
     }
 
     if let memory = serverStats["memory"] as? [String: Any] {
-      statsText += "💾 Memory Usage:\n"
+      statsText += "Memory Usage:\n"
       statsText += "  • Used: \(memory["used"] ?? 0) MB\n"
       statsText += "  • Total: \(memory["total"] ?? 0) MB\n\n"
     }
 
     if let cpu = serverStats["cpu"] as? [String: Any] {
-      statsText += "⚡ CPU Usage:\n"
+      statsText += "CPU Usage:\n"
       statsText += "  • Usage: \(String(format: "%.1f", cpu["usage"] as? Double ?? 0.0))%\n\n"
     }
 
@@ -1096,7 +1096,7 @@ class DialogManager {
         protocolView.orientation = .vertical
         protocolView.spacing = 2
 
-        let nameLabel = NSTextField(labelWithString: "🔌 \(protocolName.uppercased())")
+        let nameLabel = NSTextField(labelWithString: protocolName.uppercased())
         nameLabel.font = NSFont.boldSystemFont(ofSize: 12)
         protocolView.addArrangedSubview(nameLabel)
 
@@ -1179,7 +1179,7 @@ class DialogManager {
     stackView.addArrangedSubview(tagField)
 
     let warningLabel = NSTextField(
-      labelWithString: "⚠️ This will disconnect ALL sessions with the specified tag!")
+      labelWithString: "Warning: This will disconnect ALL sessions with the specified tag!")
     warningLabel.font = NSFont.systemFont(ofSize: 11)
     warningLabel.textColor = .systemRed
     stackView.addArrangedSubview(warningLabel)
@@ -1277,7 +1277,7 @@ class DialogManager {
     let response = alert.runModal()
 
     guard response == .alertFirstButtonReturn else {
-      print("🚫 Push settings configuration cancelled by user")
+      print("Push settings configuration cancelled by user")
       completion(nil)
       return
     }

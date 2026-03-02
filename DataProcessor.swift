@@ -374,92 +374,92 @@ class DataProcessor {
 
   func processAllStreams(_ streamsData: Any?) -> [String: Any] {
     print(
-      "🔍 processAllStreams - Input type: \(type(of: streamsData)), value: \(streamsData ?? "nil")")
+      "processAllStreams - Input type: \(type(of: streamsData)), value: \(streamsData ?? "nil")")
 
     // Handle null values gracefully (normal for fresh server)
     if streamsData == nil || streamsData is NSNull {
-      print("📊 No streams configured")
+      print("No streams configured")
       return [:]
     }
 
     guard let streams = streamsData as? [String: Any] else {
-      print("❌ Invalid streams data format - expected [String: Any], got \(type(of: streamsData))")
+      print("Invalid streams data format - expected [String: Any], got \(type(of: streamsData))")
       return [:]
     }
 
-    print("📊 Processing \(streams.count) total streams: \(Array(streams.keys))")
+    print("Processing \(streams.count) total streams: \(Array(streams.keys))")
     return streams
   }
 
   func processStreamStats(_ statsData: Any?) -> [String: Any] {
-    print("🔍 processStreamStats - Input type: \(type(of: statsData)), value: \(statsData ?? "nil")")
+    print("processStreamStats - Input type: \(type(of: statsData)), value: \(statsData ?? "nil")")
 
     // Handle null values gracefully (normal for fresh server)
     if statsData == nil || statsData is NSNull {
-      print("📊 No stream statistics available")
+      print("No stream statistics available")
       return [:]
     }
 
     guard let stats = statsData as? [String: Any] else {
       print(
-        "❌ Invalid stream stats data format - expected [String: Any], got \(type(of: statsData))")
+        "Invalid stream stats data format - expected [String: Any], got \(type(of: statsData))")
       return [:]
     }
 
-    print("📊 Processing stream statistics for \(stats.count) streams: \(Array(stats.keys))")
+    print("Processing stream statistics for \(stats.count) streams: \(Array(stats.keys))")
     return stats
   }
 
   func processPushList(_ pushListData: Any?) -> [String: Any] {
     print(
-      "🔍 processPushList - Input type: \(type(of: pushListData)), value: \(pushListData ?? "nil")")
+      "processPushList - Input type: \(type(of: pushListData)), value: \(pushListData ?? "nil")")
 
     // Handle null values gracefully (normal for fresh server)
     if pushListData == nil || pushListData is NSNull {
-      print("📊 No pushes configured")
+      print("No pushes configured")
       return [:]
     }
 
     guard let pushes = pushListData as? [String: Any] else {
       print(
-        "❌ Invalid push list data format - expected [String: Any], got \(type(of: pushListData))")
+        "Invalid push list data format - expected [String: Any], got \(type(of: pushListData))")
       return [:]
     }
 
-    print("📊 Processing \(pushes.count) active pushes: \(Array(pushes.keys))")
+    print("Processing \(pushes.count) active pushes: \(Array(pushes.keys))")
     return pushes
   }
 
   func processClients(_ clientsData: Any?) -> [String: Any] {
-    print("🔍 processClients - Input type: \(type(of: clientsData)), value: \(clientsData ?? "nil")")
+    print("processClients - Input type: \(type(of: clientsData)), value: \(clientsData ?? "nil")")
 
     // Handle null values gracefully (normal for fresh server)
     if clientsData == nil || clientsData is NSNull {
-      print("📊 No clients connected")
+      print("No clients connected")
       return [:]
     }
 
     // Handle MistServer's clients data structure: {"data": <null>, "fields": [...], "time": 123}
     if let clientsDict = clientsData as? [String: Any] {
-      print("🔍 Clients dict keys: \(Array(clientsDict.keys))")
+      print("Clients dict keys: \(Array(clientsDict.keys))")
       if let data = clientsDict["data"], data is NSNull {
-        print("📊 No clients connected (data field is null)")
+        print("No clients connected (data field is null)")
         return [:]
       } else if let data = clientsDict["data"] as? [String: Any] {
-        print("📊 Processing \(data.count) connected clients: \(Array(data.keys))")
+        print("Processing \(data.count) connected clients: \(Array(data.keys))")
         return data
       } else {
-        print("📊 Processing clients data structure with keys: \(Array(clientsDict.keys))")
+        print("Processing clients data structure with keys: \(Array(clientsDict.keys))")
         return clientsDict
       }
     }
 
     guard let clients = clientsData as? [String: Any] else {
-      print("❌ Invalid clients data format - expected [String: Any], got \(type(of: clientsData))")
+      print("Invalid clients data format - expected [String: Any], got \(type(of: clientsData))")
       return [:]
     }
 
-    print("📊 Processing \(clients.count) connected clients: \(Array(clients.keys))")
+    print("Processing \(clients.count) connected clients: \(Array(clients.keys))")
     return clients
   }
 }

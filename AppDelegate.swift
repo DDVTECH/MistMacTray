@@ -9,7 +9,6 @@ import Foundation
 class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   // MARK: - Core Properties
   var statusItem: NSStatusItem!
-  var updateTimer: Timer?
   var activeStreamsTimer: Timer?
 
   // MARK: - State Properties (preserved for compatibility)
@@ -32,11 +31,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   override init() {
     super.init()
-    print("🔧 AppDelegate init() is called")
+    print("AppDelegate init() is called")
   }
 
   func applicationDidFinishLaunching(_ aNotification: Notification) {
-    print("🚀 MistTray: finished loading")
+    print("[MistTray] Launched")
 
     // Initialize component managers
     menuBuilder = MenuBuilder(delegate: self)
@@ -56,21 +55,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
     // 3) Update status text
     updateStatusText()
 
-    // 4) Check for updates
-    checkForUpdates()
-
-    // 5) Schedule hourly update checks
-    updateTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
-      self.checkForUpdates()
-    }
-
-    // 6) Schedule regular active streams updates (every 10 seconds)
+    // 4) Schedule regular data updates (every 10 seconds)
     activeStreamsTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
       if MistServerManager.shared.isMistServerRunning() {
-        print("✅ Server is running, updating all data...")
         self.updateAllData()
       } else {
-        print("❌ Server not running, skipping update")
+        self.updateStatusText(checkStreams: false)
       }
     }
   }
@@ -121,55 +111,59 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   // MARK: — Menu actions
 
   @objc func openWebUI() {
-    print("🚀 MistTray: opening web UI...")
+    print("MistTray: opening web UI...")
     guard let url = URL(string: "http://localhost:4242") else { return }
     NSWorkspace.shared.open(url)
   }
 
   @objc func toggleServer() {
-    print("🚀 MistTray: toggling mistserver...")
+    print("[MistTray] Toggling MistServer...")
 
-    if MistServerManager.shared.isMistServerRunning() {
-      // Server is running, so stop it
-      MistServerManager.shared.stopServer()
-    } else {
-      // Server is not running, so start it
-      MistServerManager.shared.startServer { [weak self] success in
+    if mistServerManager.isMistServerRunning() {
+      mistServerManager.stopServer { [weak self] success in
         DispatchQueue.main.async {
-          if success {
-            print("✅ Server started successfully")
-          } else {
-            print("❌ Failed to start server")
-          }
+          print("[MistTray] Stop server: \(success ? "success" : "failed")")
           self?.updateStatusText()
-          // Give server time to start before checking streams
-          DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            self?.updateAllData()
-          }
         }
       }
-    }
-
-    // Update status immediately, then again after delay
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-      self.updateStatusText()
+    } else {
+      // Check install status before attempting start
+      switch mistServerManager.installStatus() {
+      case .installed:
+        mistServerManager.startServer { [weak self] success in
+          DispatchQueue.main.async {
+            print("[MistTray] Start server: \(success ? "success" : "failed")")
+            self?.updateStatusText()
+            if success {
+              DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                self?.updateAllData()
+              }
+            }
+          }
+        }
+      case .notInstalled:
+        DialogManager.shared.showInfoAlert(
+          title: "MistServer Not Installed",
+          message: "MistServer is not installed. Install it with:\n\nbrew tap ddvtech/mistserver\nbrew install mistserver")
+      case .noHomebrew:
+        DialogManager.shared.showInfoAlert(
+          title: "Homebrew Required",
+          message: "MistTray requires Homebrew to manage MistServer.\n\nInstall Homebrew from https://brew.sh, then run:\n\nbrew tap ddvtech/mistserver\nbrew install mistserver")
+      }
     }
   }
 
   @objc func restartServer() {
-    print("🚀 MistTray: restarting mistserver...")
+    print("[MistTray] Restarting MistServer...")
 
-    MistServerManager.shared.restartServer { [weak self] success in
+    mistServerManager.restartServer { [weak self] success in
       DispatchQueue.main.async {
-        if success {
-          print("✅ Server restarted successfully")
-        } else {
-          print("❌ Failed to restart server")
-        }
+        print("[MistTray] Restart server: \(success ? "success" : "failed")")
         self?.updateStatusText()
-        // Give server time to restart before checking streams
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-          self?.updateAllData()
+        if success {
+          DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            self?.updateAllData()
+          }
         }
       }
     }
@@ -191,12 +185,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       streamDetails += "\nBandwidth: \(bandwidthStr)"
 
       if let duration = stats["uptime"] as? Int {
-        let durationStr = DataProcessor.shared.formatConnectionTime(duration)
+        let durationStr = DataProcessor.shared.formatDuration(duration)
         streamDetails += "\nUptime: \(durationStr)"
       }
     }
 
-    print("🚀 MistTray: nuking stream: \(streamName)")
+    print("MistTray: nuking stream: \(streamName)")
 
     DialogManager.shared.showConfirmationAlert(
       title: "Nuke Stream",
@@ -206,7 +200,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       isDestructive: true
     ) { [weak self] confirmed in
       guard confirmed else {
-        print("🚫 Stream nuke cancelled by user")
+        print("Stream nuke cancelled by user")
         return
       }
 
@@ -214,9 +208,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
         DispatchQueue.main.async {
           switch result {
           case .success:
-            print("✅ Stream nuked successfully")
+            print("Stream nuked successfully")
           case .failure(let error):
-            print("❌ Failed to nuke stream: \(error)")
+            print("Failed to nuke stream: \(error)")
           }
 
           // Update UI after operation
@@ -227,15 +221,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
         }
       }
     }
-  }
-
-  @objc func removeEmbeddedInstallation() {
-    print("🚀 MistTray: removing embedded installation...")
-    let appSupport = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Application Support/MistTray/mistserver")
-    try? FileManager.default.removeItem(at: appSupport)
-    UserDefaults.standard.removeObject(forKey: "EmbeddedMistTag")
-    updateStatusText()
   }
 
   // MARK: — Status control
@@ -251,9 +236,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       isRunning: isRunning,
       activeStreams: activeStreams,
       activePushes: activePushes,
-      totalViewers: totalViewers,
-      serverType: findBrewMistserver() != nil ? "Brew" : "Embedded"
+      totalViewers: totalViewers
     )
+    statusLine.image = MenuBuilder.tintedSFSymbolImage(
+      "circle.fill", color: isRunning ? .systemGreen : .systemRed,
+      accessibilityDescription: isRunning ? "Running" : "Stopped")
 
     updateMenuItemStates(isRunning: isRunning)
 
@@ -263,51 +250,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   func getTotalViewers() -> Int {
-    return UtilityManager.shared.getTotalViewers(from: streamStats)
+    return connectedClients.count
   }
 
   func updateMenuItemStates(isRunning: Bool) {
     guard let menu = statusItem.menu else { return }
 
-    print("🔧 Updating menu states - Server running: \(isRunning)")
+    print("Updating menu states - Server running: \(isRunning)")
+
+    let actionsRequiringRunningServer: [Selector] = [
+      #selector(openWebUI),
+      #selector(restartServer),
+      #selector(createNewStream),
+      #selector(startNewPush),
+      #selector(manageAutoPushRules),
+      #selector(backupConfiguration),
+      #selector(restoreConfiguration),
+      #selector(saveConfiguration),
+      #selector(factoryReset),
+      #selector(refreshMonitoring),
+      #selector(refreshProtocols),
+    ]
 
     // Find and update menu items
     for (index, item) in menu.items.enumerated() {
-      let oldTitle = item.title
       let oldEnabled = item.isEnabled
 
       if item.action == #selector(toggleServer) {
         // Update the toggle button title and state
-        item.title = isRunning ? "🟥 Stop MistServer" : "▶️ Start MistServer"
+        item.title = isRunning ? "Stop Server" : "Start Server"
+        item.image = MenuBuilder.sfSymbolImage(
+          isRunning ? "stop.fill" : "play.fill",
+          accessibilityDescription: isRunning ? "Stop" : "Start")
         item.isEnabled = true  // Toggle button is always enabled
         print(
-          "🎛️ Menu item [\(index)] toggle: '\(oldTitle)' -> '\(item.title)' (enabled: \(item.isEnabled))"
+          "Menu item [\(index)] toggle now '\(item.title)' (enabled: \(item.isEnabled))"
         )
-      } else {
-        switch item.title {
-        case "Restart MistServer":
-          item.isEnabled = isRunning
-        case "Open Web UI":
-          item.isEnabled = isRunning
-        case "Active streams":
-          item.isEnabled = isRunning
-        case "Pushes":
-          item.isEnabled = isRunning
-        case "Connected Clients":
-          item.isEnabled = isRunning
-        case "Stream Configuration":
-          item.isEnabled = isRunning
-        case "System Monitoring":
-          item.isEnabled = isRunning
-        case "Protocol Management":
-          item.isEnabled = isRunning
-        case "Configuration Backup":
-          item.isEnabled = isRunning
-        default:
-          continue
-        }
+        continue
+      }
 
-        print("🎛️ Menu item [\(index)] '\(item.title)': \(oldEnabled) -> \(item.isEnabled)")
+      if let action = item.action, actionsRequiringRunningServer.contains(action) {
+        item.isEnabled = isRunning
+        print("Menu item [\(index)] '\(item.title)': \(oldEnabled) -> \(item.isEnabled)")
       }
     }
 
@@ -339,13 +323,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
           // Disable all other interactive submenu items when server is stopped
           if !isRunning && subItem.isEnabled {
             subItem.isEnabled = false
-            print("🎛️ Disabled submenu item: '\(subItem.title)'")
+            print("Disabled submenu item: '\(subItem.title)'")
           } else if isRunning && !subItem.isEnabled && subItem.action != nil {
             // Re-enable items when server starts (except info items)
             let infoTitles = ["No active streams", "No active pushes", "No connected clients"]
             if !infoTitles.contains(subItem.title) {
               subItem.isEnabled = true
-              print("🎛️ Enabled submenu item: '\(subItem.title)'")
+              print("Enabled submenu item: '\(subItem.title)'")
             }
           }
 
@@ -359,7 +343,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   func updateActiveStreams(retryCount: Int = 0) {
-    print("🔄 Updating active streams (attempt \(retryCount + 1))...")
+    print("Updating active streams (attempt \(retryCount + 1))...")
 
     refreshAllData()
   }
@@ -370,165 +354,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
     return mistServerManager.isMistServerRunning()
   }
 
-  func isEmbeddedRunning() -> Bool {
-    return mistServerManager.isEmbeddedRunning()
-  }
-
-  func findBrewMistserver() -> String? {
-    return mistServerManager.findBrewMistserver()
-  }
-
-  func findEmbeddedMistserver() -> String? {
-    return mistServerManager.findEmbeddedMistserver()
-  }
-
-  func checkForEmbeddedUpdate() {
-    mistServerManager.checkForUpdates { result in
-      // Handle update check result if needed
-    }
-  }
-
-  func downloadAndInstallLatestMistserver(completion: @escaping (String?) -> Void) {
-    MistServerManager.shared.downloadAndInstallLatestMistserver(completion: completion)
-  }
-
-  // MARK: — Shell helpers
-
-  @discardableResult
-  func runShellCommand(_ launchPath: String, arguments: [String]) -> Int32 {
-    let command = "\(launchPath) \(arguments.joined(separator: " "))"
-    let result = UtilityManager.shared.runShellCommand(command)
-    return result.exitCode
-  }
-
-  @discardableResult
-  func runMistServer(executablePath: String) -> Process {
-    // Delegate to MistServerManager
-    return mistServerManager.runMistServer(executablePath: executablePath)
-  }
-
-  func ensureDefaultConfig() -> String {
-    let baseDir = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Application Support/MistTray/mistserver")
-
-    // Create base directory if it doesn't exist
-    if !FileManager.default.fileExists(atPath: baseDir.path) {
-      do {
-        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
-        print("📁 Created MistServer directory: \(baseDir.path)")
-      } catch {
-        print("❌ Failed to create MistServer directory: \(error)")
-        return baseDir.appendingPathComponent("config.json").path
-      }
-    }
-
-    mistServerManager.createDefaultConfig(in: baseDir)
-    return baseDir.appendingPathComponent("config.json").path
-  }
-
-  func runShellCommandWithOutput(_ launchPath: String, arguments: [String]) -> String {
-    let command = "\(launchPath) \(arguments.joined(separator: " "))"
-    let result = UtilityManager.shared.runShellCommand(command)
-    return result.output
-  }
-
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     return false
   }
 
   func applicationWillTerminate(_ aNotification: Notification) {
-    updateTimer?.invalidate()
     activeStreamsTimer?.invalidate()
   }
-
-  // MARK: — Hybrid update system
-
-  func checkForUpdates() {
-    print("🔧 Checking for updates using hybrid system...")
-
-    if isMistServerRunning() {
-      print("📡 Server running - using API-based update check")
-      checkForUpdatesViaAPI()
-    } else if findEmbeddedMistserver() != nil || findBrewMistserver() != nil {
-      print("📦 Server installed but not running - using manual update check")
-      checkForEmbeddedUpdate()
-    } else {
-      print("📦 No server found - need initial installation")
-      downloadAndInstallLatestMistserver { [weak self] installedPath in
-        if installedPath != nil {
-          print("✅ Initial installation completed")
-          DispatchQueue.main.async {
-            self?.updateStatusText()
-          }
-        }
-      }
-    }
-  }
-
-  func checkForUpdatesViaAPI() {
-    print("🔧 Checking for updates via MistServer API...")
-
-    // Check if auto-update is enabled
-    let autoUpdateEnabled = UserDefaults.standard.bool(forKey: "AutoUpdateEnabled")
-    print("📊 Auto-update enabled: \(autoUpdateEnabled)")
-
-    APIClient.shared.checkForUpdates { [weak self] result in
-      DispatchQueue.main.async {
-        switch result {
-        case .success(let json):
-          print("📡 Update check response: \(json)")
-
-          if let updateInfo = json["checkupdate"] as? [String: Any] {
-            if let updateAvailable = updateInfo["update"] as? Bool, updateAvailable {
-              print("🔄 Update available via API")
-
-              if autoUpdateEnabled {
-                print("✅ Auto-update enabled, performing update automatically")
-                self?.performUpdateViaAPI()
-              } else {
-                print("⚠️ Auto-update disabled, skipping automatic update")
-                // Could show notification here in the future
-              }
-            } else {
-              print("✅ No updates available via API")
-            }
-          } else {
-            print("❌ Unexpected update check response format")
-          }
-        case .failure(let error):
-          print("❌ API update check error: \(error)")
-          // Fallback to manual check
-          self?.checkForEmbeddedUpdate()
-        }
-      }
-    }
-  }
-
-  func performUpdateViaAPI() {
-    print("🔧 Performing update via MistServer API...")
-
-    APIClient.shared.performUpdate { [weak self] result in
-      DispatchQueue.main.async {
-        switch result {
-        case .success(let json):
-          print("📡 Update response: \(json)")
-
-          if let updateResult = json["update"] {
-            print("✅ Update completed via API: \(updateResult)")
-
-            // Update status after a delay to let server restart
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-              self?.updateStatusText()
-            }
-          }
-        case .failure(let error):
-          print("❌ API update error: \(error)")
-        }
-      }
-    }
-  }
-
-  // MARK: — Legacy update system (for initial installation)
 
   @objc func dismissModalWindow(_ sender: NSButton) {
     NSApp.stopModal(withCode: .cancel)
@@ -539,7 +371,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   func performPushStart(streamName: String, targetURL: String) {
-    print("🚀 MistTray: starting push for stream '\(streamName)' to '\(targetURL)'")
+    print("MistTray: starting push for stream '\(streamName)' to '\(targetURL)'")
 
     pushManager.performPushStart(streamName: streamName, targetURL: targetURL) {
       [weak self] result in
@@ -575,10 +407,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       UserDefaults.standard.set(preferences.startServerOnLaunch, forKey: "LaunchAtStartup")
       UserDefaults.standard.set(preferences.showNotifications, forKey: "ShowNotifications")
 
-      // Apply any immediate changes
-      if preferences.autoUpdateEnabled {
-        self?.checkForUpdates()
-      }
+      print("[MistTray] Preferences saved")
     }
   }
 
@@ -593,7 +422,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   /// Refreshes ALL application data from the server and updates the complete state
   /// This is the single source of truth for application state updates
   private func refreshAllData() {
-    print("🔄 Refreshing complete application state...")
+    print("Refreshing complete application state...")
 
     // Fetch all server data in one comprehensive call
     APIClient.shared.fetchAllServerData { [weak self] result in
@@ -602,7 +431,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
         case .success(let data):
           self?.updateCompleteState(from: data)
         case .failure(let error):
-          print("❌ Failed to refresh application state: \(error)")
+          print("Failed to refresh application state: \(error)")
         }
       }
     }
@@ -611,14 +440,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   /// Updates the complete application state from server data
   /// This ensures all state variables are consistent and the menu reflects reality
   private func updateCompleteState(from serverData: [String: Any]) {
-    print("📊 Updating complete application state...")
+    print("Updating complete application state...")
 
     // 1. Process all streams (configured streams, whether online or offline)
     allStreams = DataProcessor.shared.processAllStreams(serverData["streams"])
 
     // 2. Process active streams (only the ones currently streaming)
-    if let activeStreamsList = serverData["active_streams"] as? [String] {
-      activeStreams = activeStreamsList
+    if let activeStreamsDict = serverData["active_streams"] as? [String: Any] {
+      activeStreams = Array(activeStreamsDict.keys).sorted()
+    } else if let activeStreamsList = serverData["active_streams"] as? [String] {
+      activeStreams = activeStreamsList.sorted()
     } else {
       activeStreams = []
     }
@@ -645,9 +476,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
     updateStatusText(checkStreams: false)
     rebuildMenu()
 
-    print("✅ Application state updated successfully")
+    print("Application state updated successfully")
     print(
-      "📊 State summary: \(allStreams.count) configured streams, \(activeStreams.count) active, \(activePushes.count) pushes, \(connectedClients.count) clients"
+      "State summary: \(allStreams.count) configured streams, \(activeStreams.count) active, \(activePushes.count) pushes, \(connectedClients.count) clients"
     )
   }
 
@@ -734,7 +565,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   // MARK: — System Monitoring
 
   @objc func showServerStatistics() {
-    print("🚀 MistTray: showing server statistics...")
+    print("MistTray: showing server statistics...")
 
     // Use existing state data - no need for separate API call
     DialogManager.shared.showServerStatistics(
@@ -748,7 +579,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   // MARK: — Protocol Management
 
   @objc func viewActiveProtocols() {
-    print("🚀 MistTray: viewing active protocols...")
+    print("MistTray: viewing active protocols...")
 
     // Use existing protocol data from unified state
     DialogManager.shared.showActiveProtocols(protocols: lastProtocolData)
@@ -758,7 +589,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
     DialogManager.shared.showProtocolConfigurationDialog(protocolName: protocolName) {
       [weak self] config in
       if let protocolConfig = config {
-        print("✅ Protocol configuration updated: \(protocolConfig)")
+        print("Protocol configuration updated: \(protocolConfig)")
         self?.refreshAllData()
       }
     }
@@ -769,18 +600,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   func performProtocolAction(apiCall: [String: Any], actionName: String, protocolName: String) {
-    print("📡 Sending \(actionName) protocol request for \(protocolName)...")
+    print("Sending \(actionName) protocol request for \(protocolName)...")
 
     APIClient.shared.performProtocolAction(apiCall: apiCall) { result in
       DispatchQueue.main.async {
         switch result {
         case .success(let data):
-          print("📡 \(actionName.capitalized) protocol response: \(data)")
+          print("\(actionName.capitalized) protocol response: \(data)")
           DialogManager.shared.showSuccessAlert(
             title: "Protocol \(actionName.capitalized)d",
             message: "\(protocolName) protocol has been \(actionName)d successfully.")
         case .failure(let error):
-          print("❌ \(actionName.capitalized) protocol error: \(error)")
+          print("\(actionName.capitalized) protocol error: \(error)")
           DialogManager.shared.showErrorAlert(
             title: "Protocol \(actionName.capitalized) Failed",
             message:
@@ -793,7 +624,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   // MARK: — Auto-Push Rules Management
 
   @objc func manageAutoPushRules() {
-    print("🚀 MistTray: managing auto-push rules...")
+    print("MistTray: managing auto-push rules...")
 
     // Fetch rules and show dialog
     pushManager.listAutoPushRules { [weak self] result in
@@ -802,7 +633,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
         case .success(let rules):
           self?.showAutoPushRulesDialog(existingRules: rules)
         case .failure(let error):
-          print("❌ Failed to fetch auto-push rules: \(error)")
+          print("Failed to fetch auto-push rules: \(error)")
           self?.showAutoPushRulesDialog(existingRules: [:])
         }
       }
@@ -831,7 +662,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   func createAutoPushRule(streamPattern: String, targetURL: String) {
-    print("🚀 MistTray: creating auto-push rule for '\(streamPattern)' to '\(targetURL)'")
+    print("MistTray: creating auto-push rule for '\(streamPattern)' to '\(targetURL)'")
 
     APIClient.shared.createAutoPushRule(streamPattern: streamPattern, targetURL: targetURL) {
       [weak self] result in
@@ -846,7 +677,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
             self?.manageAutoPushRules()
           }
         case .failure(let error):
-          print("❌ Auto-push rule creation error: \(error)")
+          print("Auto-push rule creation error: \(error)")
           DialogManager.shared.showErrorAlert(
             title: "Rule Creation Failed",
             message: "Failed to create auto-push rule: \(error.localizedDescription)")
@@ -856,7 +687,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   func deleteAutoPushRule(withId ruleId: String) {
-    print("🚀 MistTray: deleting auto-push rule: \(ruleId)")
+    print("MistTray: deleting auto-push rule: \(ruleId)")
 
     DialogManager.shared.showConfirmationAlert(
       title: "Delete Auto-Push Rule",
@@ -865,7 +696,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       isDestructive: true
     ) { confirmed in
       guard confirmed else {
-        print("🚫 Auto-push rule deletion cancelled by user")
+        print("Auto-push rule deletion cancelled by user")
         return
       }
 
@@ -876,7 +707,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
             DialogManager.shared.showSuccessAlert(
               title: "Auto-Push Rule Deleted", message: "Successfully deleted auto-push rule.")
           case .failure(let error):
-            print("❌ Auto-push rule deletion error: \(error)")
+            print("Auto-push rule deletion error: \(error)")
             DialogManager.shared.showErrorAlert(
               title: "Deletion Failed",
               message: "Failed to delete auto-push rule: \(error.localizedDescription)")
@@ -889,7 +720,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   // MARK: - MenuBuilderDelegate Methods
 
   @objc func createNewStream() {
-    print("🚀 MistTray: creating new stream...")
+    print("MistTray: creating new stream...")
 
     DialogManager.shared.showCreateStreamDialog { [weak self] config in
       guard let streamConfig = config else { return }
@@ -915,7 +746,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func editStream(_ sender: NSMenuItem) {
     guard let streamName = sender.representedObject as? String else { return }
-    print("🚀 MistTray: editing stream: \(streamName)")
+    print("MistTray: editing stream: \(streamName)")
 
     let currentConfig = allStreams[streamName] as? [String: Any] ?? [:]
     DialogManager.shared.showEditStreamDialog(streamName: streamName, currentConfig: currentConfig)
@@ -944,7 +775,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func deleteStream(_ sender: NSMenuItem) {
     guard let streamName = sender.representedObject as? String else { return }
-    print("🚀 MistTray: deleting stream: \(streamName)")
+    print("MistTray: deleting stream: \(streamName)")
 
     DialogManager.shared.showConfirmationAlert(
       title: "Delete Stream",
@@ -975,7 +806,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func manageStreamTags(_ sender: NSMenuItem) {
     guard let streamName = sender.representedObject as? String else { return }
-    print("🚀 MistTray: managing tags for stream: \(streamName)")
+    print("MistTray: managing tags for stream: \(streamName)")
 
     DialogManager.shared.showStreamTagsDialog(streamName: streamName) { [weak self] tags in
       guard let tags = tags else { return }
@@ -1000,7 +831,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   @objc func startNewPush() {
-    print("🚀 MistTray: starting new push...")
+    print("MistTray: starting new push...")
 
     // Use existing stream data instead of separate API call
     let streamNames = Array(allStreams.keys)
@@ -1030,9 +861,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func stopPush(_ sender: NSMenuItem) {
     guard let pushId = sender.representedObject as? String else { return }
-    print("🚀 MistTray: stopping push: \(pushId)")
+    print("MistTray: stopping push: \(pushId)")
 
-    pushManager.stopPush(streamName: pushId) { [weak self] result in
+    pushManager.stopPush(pushId: pushId) { [weak self] result in
       DispatchQueue.main.async {
         switch result {
         case .success:
@@ -1049,13 +880,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func disconnectClient(_ sender: NSMenuItem) {
     guard let sessionId = sender.representedObject as? String else { return }
-    print("🚀 MistTray: disconnecting client: \(sessionId)")
+    print("MistTray: disconnecting client: \(sessionId)")
 
     clientManager.disconnectClient(sessionId: sessionId) { [weak self] result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Client disconnected successfully")
+          print("Client disconnected successfully")
           self?.refreshAllData()
         case .failure(let error):
           DialogManager.shared.showErrorAlert(
@@ -1068,7 +899,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func kickAllViewers(_ sender: NSMenuItem) {
     guard let streamName = sender.representedObject as? String else { return }
-    print("🚀 MistTray: kicking all viewers from stream: \(streamName)")
+    print("MistTray: kicking all viewers from stream: \(streamName)")
 
     DialogManager.shared.showConfirmationAlert(
       title: "Kick All Viewers",
@@ -1117,14 +948,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func enableProtocol(_ sender: NSMenuItem) {
     guard let protocolName = sender.representedObject as? String else { return }
-    print("🚀 MistTray: enabling protocol: \(protocolName)")
+    print("MistTray: enabling protocol: \(protocolName)")
 
     let apiCall = ["protocol_enable": protocolName]
     APIClient.shared.performProtocolAction(apiCall: apiCall) { [weak self] result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Protocol enabled successfully")
+          print("Protocol enabled successfully")
           self?.refreshAllData()
         case .failure(let error):
           DialogManager.shared.showErrorAlert(
@@ -1136,14 +967,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func disableProtocol(_ sender: NSMenuItem) {
     guard let protocolName = sender.representedObject as? String else { return }
-    print("🚀 MistTray: disabling protocol: \(protocolName)")
+    print("MistTray: disabling protocol: \(protocolName)")
 
     let apiCall = ["protocol_disable": protocolName]
     APIClient.shared.performProtocolAction(apiCall: apiCall) { [weak self] result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Protocol disabled successfully")
+          print("Protocol disabled successfully")
           self?.refreshAllData()
         case .failure(let error):
           DialogManager.shared.showErrorAlert(
@@ -1155,19 +986,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   @objc func configureProtocol(_ sender: NSMenuItem) {
     guard let protocolName = sender.representedObject as? String else { return }
-    print("🚀 MistTray: configuring protocol: \(protocolName)")
+    print("MistTray: configuring protocol: \(protocolName)")
 
     DialogManager.shared.showProtocolConfigurationDialog(protocolName: protocolName) {
       [weak self] config in
       if let protocolConfig = config {
-        print("✅ Protocol configuration updated: \(protocolConfig)")
+        print("Protocol configuration updated: \(protocolConfig)")
         self?.refreshAllData()
       }
     }
   }
 
   @objc func backupConfiguration() {
-    print("🚀 MistTray: backing up configuration...")
+    print("MistTray: backing up configuration...")
 
     DialogManager.shared.showBackupConfigurationDialog { url in
       guard let url = url else { return }
@@ -1190,7 +1021,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   @objc func restoreConfiguration() {
-    print("🚀 MistTray: restoring configuration...")
+    print("MistTray: restoring configuration...")
 
     DialogManager.shared.showRestoreConfigurationDialog { [weak self] url in
       guard let url = url else { return }
@@ -1222,7 +1053,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   @objc func saveConfiguration() {
-    print("🚀 MistTray: saving configuration...")
+    print("MistTray: saving configuration...")
 
     ConfigurationManager.shared.saveConfiguration { result in
       DispatchQueue.main.async {
@@ -1240,7 +1071,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   @objc func factoryReset() {
-    print("🚀 MistTray: performing factory reset...")
+    print("MistTray: performing factory reset...")
 
     if DialogManager.shared.confirmFactoryReset() {
       ConfigurationManager.shared.performFactoryReset { [weak self] result in
@@ -1262,12 +1093,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   @objc func refreshMonitoring() {
-    print("🚀 MistTray: refreshing monitoring data...")
+    print("MistTray: refreshing monitoring data...")
     refreshAllData()
   }
 
   @objc func refreshProtocols() {
-    print("🚀 MistTray: refreshing protocols...")
+    print("MistTray: refreshing protocols...")
     refreshAllData()
   }
 
@@ -1298,18 +1129,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   func stopTaggedSessions(tag: String) {
-    print("🛑 Stopping all sessions with tag: \(tag)")
+    print("Stopping all sessions with tag: \(tag)")
 
     APIClient.shared.stopTaggedSessions(tag: tag) { [weak self] result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Successfully stopped sessions with tag: \(tag)")
+          print("Successfully stopped sessions with tag: \(tag)")
           DialogManager.shared.showSuccessAlert(
             title: "Success", message: "Stopped all sessions tagged with '\(tag)'")
           self?.refreshAllData()
         case .failure(let error):
-          print("❌ Failed to stop sessions with tag: \(tag)")
+          print("Failed to stop sessions with tag: \(tag)")
           DialogManager.shared.showErrorAlert(
             title: "Error",
             message: "Failed to stop sessions with tag '\(tag)': \(error.localizedDescription)")
@@ -1323,7 +1154,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   @objc func configurePushSettings() {
-    print("⚙️ MistTray: configuring push settings...")
+    print("MistTray: configuring push settings...")
 
     DialogManager.shared.showPushSettingsDialog { [weak self] settings in
       guard let settings = settings else { return }

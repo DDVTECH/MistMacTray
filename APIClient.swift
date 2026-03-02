@@ -30,11 +30,11 @@ class APIClient {
     request.httpBody = jsonData
     request.timeoutInterval = 10.0
 
-    print("📡 API Call: \(apiCall)")
+    print("API Call: \(apiCall)")
 
     session.dataTask(with: request) { data, response, error in
       if let error = error {
-        print("❌ API Error: \(error)")
+        print("API Error: \(error)")
         DispatchQueue.main.async {
           completion(.failure(.networkError(error)))
         }
@@ -42,7 +42,7 @@ class APIClient {
       }
 
       guard let data = data else {
-        print("❌ No data received")
+        print("No data received")
         DispatchQueue.main.async {
           completion(.failure(.noData))
         }
@@ -50,7 +50,7 @@ class APIClient {
       }
 
       if let httpResponse = response as? HTTPURLResponse {
-        print("📡 API Response status: \(httpResponse.statusCode)")
+        print("API Response status: \(httpResponse.statusCode)")
 
         if httpResponse.statusCode != 200 {
           DispatchQueue.main.async {
@@ -62,13 +62,13 @@ class APIClient {
 
       do {
         if let json = try JSONSerialization.jsonObject(with: data) as? T {
-          print("📡 API Response: Success")
+          print("API Response: Success")
 
           // Add detailed response logging for debugging
           if let jsonDict = json as? [String: Any] {
-            print("📡 Full API Response Data:")
+            print("Full API Response Data:")
             for (key, value) in jsonDict {
-              print("   \(key): \(value)")
+              print("\(key): \(value)")
             }
           }
 
@@ -76,15 +76,15 @@ class APIClient {
             completion(.success(json))
           }
         } else {
-          print("❌ Failed to parse response as expected type")
-          print("📡 Raw response data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
+          print("Failed to parse response as expected type")
+          print("Raw response data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
           DispatchQueue.main.async {
             completion(.failure(.parseError))
           }
         }
       } catch {
-        print("❌ JSON parsing error: \(error)")
-        print("📡 Raw response data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
+        print("JSON parsing error: \(error)")
+        print("Raw response data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
         DispatchQueue.main.async {
           completion(.failure(.parseError))
         }
@@ -105,7 +105,7 @@ class APIClient {
           let nsError = networkError as NSError
           if nsError.code == -1004 {  // Connection failed
             let delay = Double(retryCount + 1) * 2.0
-            print("🔄 Retrying API call in \(delay)s... (attempt \(retryCount + 1)/\(maxRetries))")
+            print("Retrying API call in \(delay)s... (attempt \(retryCount + 1)/\(maxRetries))")
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
               self?.makeAPICallWithRetry(
                 apiCall, retryCount: retryCount + 1, maxRetries: maxRetries, completion: completion)
@@ -299,6 +299,8 @@ class APIClient {
       "streams": true,  // Get ALL streams, not just active ones
       "stats_streams": true,
       "push_list": true,
+      "config": true,
+      "totals": true,
       "clients": [
         "fields": ["host", "stream", "protocol", "conntime", "sessId"]
       ],
@@ -414,11 +416,11 @@ class APIClient {
     request.httpBody = try? JSONSerialization.data(withJSONObject: apiCall)
     request.timeoutInterval = 30.0  // Updates might take longer
 
-    print("📡 API Call (Update): \(apiCall)")
+    print("API Call (Update): \(apiCall)")
 
     session.dataTask(with: request) { data, response, error in
       if let error = error {
-        print("❌ Update API Error: \(error)")
+        print("Update API Error: \(error)")
         DispatchQueue.main.async {
           completion(.failure(.networkError(error)))
         }
@@ -426,7 +428,7 @@ class APIClient {
       }
 
       guard let data = data else {
-        print("❌ No data received for update")
+        print("No data received for update")
         DispatchQueue.main.async {
           completion(.failure(.noData))
         }
@@ -434,7 +436,7 @@ class APIClient {
       }
 
       if let httpResponse = response as? HTTPURLResponse {
-        print("📡 Update API Response status: \(httpResponse.statusCode)")
+        print("Update API Response status: \(httpResponse.statusCode)")
 
         if httpResponse.statusCode != 200 {
           DispatchQueue.main.async {
@@ -446,18 +448,18 @@ class APIClient {
 
       do {
         if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-          print("📡 Update API Response: Success")
+          print("Update API Response: Success")
           DispatchQueue.main.async {
             completion(.success(json))
           }
         } else {
-          print("❌ Failed to parse update response")
+          print("Failed to parse update response")
           DispatchQueue.main.async {
             completion(.failure(.parseError))
           }
         }
       } catch {
-        print("❌ Update JSON parsing error: \(error)")
+        print("Update JSON parsing error: \(error)")
         DispatchQueue.main.async {
           completion(.failure(.parseError))
         }

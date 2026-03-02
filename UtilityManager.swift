@@ -92,7 +92,7 @@ class UtilityManager {
         at: url, withIntermediateDirectories: true, attributes: nil)
       return true
     } catch {
-      print("❌ Failed to create directory: \(error)")
+      print("Failed to create directory: \(error)")
       return false
     }
   }
@@ -106,7 +106,7 @@ class UtilityManager {
       try FileManager.default.removeItem(atPath: path)
       return true
     } catch {
-      print("❌ Failed to remove file: \(error)")
+      print("Failed to remove file: \(error)")
       return false
     }
   }
@@ -116,7 +116,7 @@ class UtilityManager {
       try FileManager.default.copyItem(atPath: sourcePath, toPath: destinationPath)
       return true
     } catch {
-      print("❌ Failed to copy file: \(error)")
+      print("Failed to copy file: \(error)")
       return false
     }
   }
@@ -207,33 +207,33 @@ class UtilityManager {
   }
 
   func generateStatusText(
-    isRunning: Bool, activeStreams: [String], activePushes: [String: Any], totalViewers: Int,
-    serverType: String
+    isRunning: Bool, activeStreams: [String], activePushes: [String: Any], totalViewers: Int
   ) -> String {
     if !isRunning {
-      return "MistServer: Stopped"
+      switch MistServerManager.shared.installStatus() {
+      case .installed:
+        return "MistServer: Stopped"
+      case .notInstalled:
+        return "MistServer: Not Installed"
+      case .noHomebrew:
+        return "MistServer: Not Installed"
+      }
     }
 
-    var statusText = "MistServer (\(serverType)): Running"
+    var statusText = "MistServer: Running"
 
-    if !activeStreams.isEmpty || !activePushes.isEmpty {
-      var details: [String] = []
-
-      if !activeStreams.isEmpty {
-        details.append("\(activeStreams.count) streams")
-      }
-
-      if !activePushes.isEmpty {
-        details.append("\(activePushes.count) pushes")
-      }
-
-      if totalViewers > 0 {
-        details.append("\(totalViewers) viewers")
-      }
-
-      if !details.isEmpty {
-        statusText += " (\(details.joined(separator: ", ")))"
-      }
+    var details: [String] = []
+    if !activeStreams.isEmpty {
+      details.append("\(activeStreams.count) streams")
+    }
+    if !activePushes.isEmpty {
+      details.append("\(activePushes.count) pushes")
+    }
+    if totalViewers > 0 {
+      details.append("\(totalViewers) viewers")
+    }
+    if !details.isEmpty {
+      statusText += " (\(details.joined(separator: ", ")))"
     }
 
     return statusText

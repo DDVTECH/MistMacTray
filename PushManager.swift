@@ -15,36 +15,33 @@ class PushManager {
   func startPush(
     streamName: String, targetURL: String, completion: @escaping (Result<Void, APIError>) -> Void
   ) {
-    print("🚀 PushManager: Starting push for stream '\(streamName)' to '\(targetURL)'")
+    print("PushManager: Starting push for stream '\(streamName)' to '\(targetURL)'")
 
     APIClient.shared.startPush(streamName: streamName, targetURL: targetURL) { result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Push started successfully")
+          print("Push started successfully")
           completion(.success(()))
         case .failure(let error):
-          print("❌ Failed to start push: \(error)")
+          print("Failed to start push: \(error)")
           completion(.failure(error))
         }
       }
     }
   }
 
-  func stopPush(streamName: String, completion: @escaping (Result<Void, APIError>) -> Void) {
-    print("🛑 PushManager: Stopping push for stream '\(streamName)'")
+  func stopPush(pushId: String, completion: @escaping (Result<Void, APIError>) -> Void) {
+    print("PushManager: Stopping push '\(pushId)'")
 
-    // Note: APIClient.stopPush expects pushId, but we only have streamName
-    // In a real implementation, we'd need to map streamName to pushId
-    // For now, we'll use streamName as pushId (this may need adjustment)
-    APIClient.shared.stopPush(pushId: streamName) { result in
+    APIClient.shared.stopPush(pushId: pushId) { result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Push stopped successfully")
+          print("Push stopped successfully")
           completion(.success(()))
         case .failure(let error):
-          print("❌ Failed to stop push: \(error)")
+          print("Failed to stop push: \(error)")
           completion(.failure(error))
         }
       }
@@ -61,14 +58,14 @@ class PushManager {
     streamPattern: String, targetURL: String,
     completion: @escaping (Result<String, APIError>) -> Void
   ) {
-    print("🚀 PushManager: Creating auto push rule for pattern '\(streamPattern)' to '\(targetURL)'")
+    print("PushManager: Creating auto push rule for pattern '\(streamPattern)' to '\(targetURL)'")
 
     APIClient.shared.createAutoPushRule(streamPattern: streamPattern, targetURL: targetURL) {
       result in
       DispatchQueue.main.async {
         switch result {
         case .success(let response):
-          print("✅ Auto push rule created successfully")
+          print("Auto push rule created successfully")
           // Extract rule ID from response if available
           if let ruleId = response["id"] as? String {
             completion(.success(ruleId))
@@ -76,7 +73,7 @@ class PushManager {
             completion(.success("rule_created"))
           }
         case .failure(let error):
-          print("❌ Failed to create auto push rule: \(error)")
+          print("Failed to create auto push rule: \(error)")
           completion(.failure(error))
         }
       }
@@ -134,12 +131,13 @@ class PushManager {
     APIClient.shared.fetchPushStatistics(completion: { result in
       switch result {
       case .success(let data):
-        let pushData = data[pushId] as? [String: Any] ?? [:]
+        let activePushes = data["active_pushes"] as? [String: Any] ?? [:]
+        let pushData = activePushes[pushId] as? [String: Any] ?? [:]
         let stats = PushStatistics(
           pushId: pushId,
-          bytesOut: pushData["bytes_out"] as? Int ?? 0,
+          bytesOut: pushData["bytes_out"] as? Int ?? pushData["bytes"] as? Int ?? 0,
           packetsOut: pushData["packets_out"] as? Int ?? 0,
-          uptime: pushData["uptime"] as? Int ?? 0,
+          uptime: pushData["uptime"] as? Int ?? pushData["active_seconds"] as? Int ?? 0,
           status: pushData["status"] as? String ?? "unknown"
         )
         completion(.success(stats))
@@ -157,7 +155,7 @@ class PushManager {
   func performPushStart(
     streamName: String, targetURL: String, completion: @escaping (Result<Void, APIError>) -> Void
   ) {
-    print("🎯 Performing push start for \(streamName) -> \(targetURL)")
+    print("Performing push start for \(streamName) -> \(targetURL)")
     startPush(streamName: streamName, targetURL: targetURL, completion: completion)
   }
 

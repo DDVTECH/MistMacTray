@@ -37,16 +37,16 @@ class ClientManager {
   }
 
   func kickAllViewers(streamName: String, completion: @escaping (Result<Void, APIError>) -> Void) {
-    print("👢 ClientManager: Kicking all viewers from stream '\(streamName)'")
+    print("ClientManager: Kicking all viewers from stream '\(streamName)'")
 
     APIClient.shared.kickAllViewers(streamName: streamName) { result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ All viewers kicked successfully")
+          print("All viewers kicked successfully")
           completion(.success(()))
         case .failure(let error):
-          print("❌ Failed to kick viewers: \(error)")
+          print("Failed to kick viewers: \(error)")
           completion(.failure(error))
         }
       }
@@ -56,16 +56,16 @@ class ClientManager {
   func forceReauthentication(
     streamName: String, completion: @escaping (Result<Void, APIError>) -> Void
   ) {
-    print("🔐 ClientManager: Forcing reauthentication for stream '\(streamName)'")
+    print("ClientManager: Forcing reauthentication for stream '\(streamName)'")
 
     APIClient.shared.forceReauthentication(streamName: streamName) { result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Reauthentication forced successfully")
+          print("Reauthentication forced successfully")
           completion(.success(()))
         case .failure(let error):
-          print("❌ Failed to force reauthentication: \(error)")
+          print("Failed to force reauthentication: \(error)")
           completion(.failure(error))
         }
       }
@@ -90,7 +90,7 @@ class ClientManager {
   func tagSessions(
     sessionIds: [String], tag: String, completion: @escaping (Result<Int, Error>) -> Void
   ) {
-    print("🏷️ Tagging sessions: \(sessionIds) with tag: \(tag)")
+    print("Tagging sessions: \(sessionIds) with tag: \(tag)")
 
     var successCount = 0
     var failureCount = 0
@@ -105,10 +105,10 @@ class ClientManager {
       APIClient.shared.tagSession(sessionId: sessionId, tag: tag) { result in
         switch result {
         case .success:
-          print("✅ Successfully tagged session \(sessionId) with \(tag)")
+          print("Successfully tagged session \(sessionId) with \(tag)")
           successCount += 1
         case .failure(let error):
-          print("❌ Failed to tag session \(sessionId): \(error)")
+          print("Failed to tag session \(sessionId): \(error)")
           failureCount += 1
         }
 
@@ -149,18 +149,18 @@ class ClientManager {
   }
 
   func updateClientsMenu() {
-    print("📋 Updating clients menu...")
+    print("Updating clients menu...")
 
     // This method is also legacy and should use unified state, but keeping for now
     // getClientsByStream { result in // This line is removed
     //     switch result {
     //     case .success(let clientsByStream):
-    //         print("✅ Retrieved clients for \(clientsByStream.count) streams")
+    //         print("Retrieved clients for \(clientsByStream.count) streams")
     //         // Menu update would be handled by the AppDelegate or main controller
     //         // that has access to the MenuBuilder instance
-    //         print("📋 Clients data ready for menu update")
+    //         print("Clients data ready for menu update")
     //     case .failure(let error):
-    //         print("❌ Failed to retrieve clients: \(error)")
+    //         print("Failed to retrieve clients: \(error)")
     //     }
     // }
   }

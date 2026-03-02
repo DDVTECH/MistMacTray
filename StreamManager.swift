@@ -15,7 +15,7 @@ class StreamManager {
   func createStream(
     name: String, source: String, completion: @escaping (Result<Void, Error>) -> Void
   ) {
-    print("🚀 StreamManager: Creating stream '\(name)' with source '\(source)'")
+    print("StreamManager: Creating stream '\(name)' with source '\(source)'")
 
     APIClient.shared.createStream(name: name, source: source) { result in
       switch result {
@@ -28,7 +28,7 @@ class StreamManager {
   }
 
   func deleteStream(name: String, completion: @escaping (Result<Void, Error>) -> Void) {
-    print("🚀 StreamManager: Deleting stream '\(name)'")
+    print("StreamManager: Deleting stream '\(name)'")
     APIClient.shared.deleteStream(name) { result in
       switch result {
       case .success:
@@ -40,7 +40,7 @@ class StreamManager {
   }
 
   func nukeStream(name: String, completion: @escaping (Result<Void, Error>) -> Void) {
-    print("🚀 StreamManager: Nuking stream '\(name)'")
+    print("StreamManager: Nuking stream '\(name)'")
     APIClient.shared.nukeStream(name) { result in
       switch result {
       case .success:
@@ -54,9 +54,9 @@ class StreamManager {
   func updateStream(
     name: String, config: [String: Any], completion: @escaping (Result<Void, Error>) -> Void
   ) {
-    print("🚀 StreamManager: Updating stream '\(name)'")
-    // For now, use configuration update - in real implementation would need specific stream update API
-    APIClient.shared.updateConfiguration(config) { result in
+    print("[StreamManager] Updating stream '\(name)'")
+    // Use addstream API — adding a stream with an existing name updates it
+    APIClient.shared.createStream(name: name, source: config["source"] as? String) { result in
       switch result {
       case .success:
         completion(.success(()))
@@ -67,7 +67,7 @@ class StreamManager {
   }
 
   func getStreamStatistics(completion: @escaping (Result<[String: Any], Error>) -> Void) {
-    print("🚀 StreamManager: Fetching stream statistics")
+    print("StreamManager: Fetching stream statistics")
     APIClient.shared.fetchStreamStatistics { result in
       switch result {
       case .success(let data):
@@ -79,7 +79,7 @@ class StreamManager {
   }
 
   func getActiveStreams(completion: @escaping (Result<[String], Error>) -> Void) {
-    print("🚀 StreamManager: Fetching active streams")
+    print("StreamManager: Fetching active streams")
 
     APIClient.shared.fetchStreamStatistics { result in
       switch result {
@@ -93,7 +93,7 @@ class StreamManager {
   }
 
   func getAllStreams(completion: @escaping (Result<[String: Any], Error>) -> Void) {
-    print("🚀 StreamManager: Fetching all streams")
+    print("StreamManager: Fetching all streams")
     // Use configuration fetch to get all streams
     APIClient.shared.fetchConfiguration { result in
       switch result {
@@ -134,16 +134,16 @@ class StreamManager {
   }
 
   func nukeStream(_ streamName: String, completion: @escaping (Result<Void, APIError>) -> Void) {
-    print("🔥 Nuking stream: \(streamName)")
+    print("Nuking stream: \(streamName)")
 
     APIClient.shared.nukeStream(streamName) { result in
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("✅ Stream \(streamName) nuked successfully")
+          print("Stream \(streamName) nuked successfully")
           completion(.success(()))
         case .failure(let error):
-          print("❌ Failed to nuke stream \(streamName): \(error)")
+          print("Failed to nuke stream \(streamName): \(error)")
           completion(.failure(error))
         }
       }
@@ -153,7 +153,7 @@ class StreamManager {
   // MARK: - Stream Tags Management
 
   func getStreamTags(streamName: String, completion: @escaping (Result<[String], Error>) -> Void) {
-    print("🚀 StreamManager: Fetching tags for stream '\(streamName)'")
+    print("StreamManager: Fetching tags for stream '\(streamName)'")
 
     APIClient.shared.fetchConfiguration { result in
       switch result {
@@ -169,10 +169,46 @@ class StreamManager {
   func updateStreamTags(
     streamName: String, tags: [String], completion: @escaping (Result<Void, Error>) -> Void
   ) {
-    print("🚀 StreamManager: Updating tags for stream '\(streamName)': \(tags)")
+    print("[StreamManager] Updating tags for stream '\(streamName)': \(tags)")
 
-    // For now, just complete successfully - in real implementation would update stream config
-    completion(.success(()))
+    // Fetch current tags, then diff and apply changes
+    APIClient.shared.fetchStreamTags(for: streamName) { [weak self] result in
+      switch result {
+      case .success(let currentTags):
+        let toAdd = tags.filter { !currentTags.contains($0) }
+        let toRemove = currentTags.filter { !tags.contains($0) }
+
+        let group = DispatchGroup()
+        var errors: [Error] = []
+
+        for tag in toAdd {
+          group.enter()
+          APIClient.shared.addStreamTag(streamName: streamName, tagName: tag) { result in
+            if case .failure(let error) = result { errors.append(error) }
+            group.leave()
+          }
+        }
+
+        for tag in toRemove {
+          group.enter()
+          APIClient.shared.removeStreamTag(streamName: streamName, tagName: tag) { result in
+            if case .failure(let error) = result { errors.append(error) }
+            group.leave()
+          }
+        }
+
+        group.notify(queue: .main) {
+          if let firstError = errors.first {
+            completion(.failure(firstError))
+          } else {
+            completion(.success(()))
+          }
+        }
+
+      case .failure(let error):
+        completion(.failure(error))
+      }
+    }
   }
 
   func addStreamTag(
@@ -303,7 +339,7 @@ class StreamManager {
   func getStreamHealth(
     streamName: String, completion: @escaping (Result<StreamHealth, Error>) -> Void
   ) {
-    print("🚀 StreamManager: Checking health for stream '\(streamName)'")
+    print("StreamManager: Checking health for stream '\(streamName)'")
 
     APIClient.shared.fetchStreamStatistics { result in
       switch result {
@@ -319,7 +355,7 @@ class StreamManager {
   func getStreamMetrics(
     streamName: String, completion: @escaping (Result<StreamMetrics, Error>) -> Void
   ) {
-    print("🚀 StreamManager: Fetching metrics for stream '\(streamName)'")
+    print("StreamManager: Fetching metrics for stream '\(streamName)'")
 
     APIClient.shared.fetchStreamStatistics { result in
       switch result {
@@ -460,52 +496,14 @@ struct StreamMetrics {
   let bytesTransferred: Int
 
   var formattedBandwidth: String {
-    return formatBandwidth(bandwidth)
+    return UtilityManager.shared.formatBandwidth(bandwidth)
   }
 
   var formattedUptime: String {
-    return formatDuration(uptime)
+    return UtilityManager.shared.formatConnectionTime(uptime)
   }
 
   var formattedBytes: String {
-    return formatBytes(bytesTransferred)
-  }
-
-  private func formatBandwidth(_ bps: Int) -> String {
-    let units = ["bps", "Kbps", "Mbps", "Gbps"]
-    var value = Double(bps)
-    var unitIndex = 0
-
-    while value >= 1000 && unitIndex < units.count - 1 {
-      value /= 1000
-      unitIndex += 1
-    }
-
-    return String(format: "%.1f %@", value, units[unitIndex])
-  }
-
-  private func formatBytes(_ bytes: Int) -> String {
-    let units = ["B", "KB", "MB", "GB", "TB"]
-    var value = Double(bytes)
-    var unitIndex = 0
-
-    while value >= 1024 && unitIndex < units.count - 1 {
-      value /= 1024
-      unitIndex += 1
-    }
-
-    return String(format: "%.1f %@", value, units[unitIndex])
-  }
-
-  private func formatDuration(_ seconds: Int) -> String {
-    let hours = seconds / 3600
-    let minutes = (seconds % 3600) / 60
-    let secs = seconds % 60
-
-    if hours > 0 {
-      return String(format: "%d:%02d:%02d", hours, minutes, secs)
-    } else {
-      return String(format: "%d:%02d", minutes, secs)
-    }
+    return UtilityManager.shared.formatBytes(bytesTransferred)
   }
 }
