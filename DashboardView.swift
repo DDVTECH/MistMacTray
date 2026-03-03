@@ -579,35 +579,16 @@ struct NavHeader: View {
 
 // MARK: - Hover Modifiers
 
-/// NSViewRepresentable that uses addCursorRect to reliably set
-/// the pointing hand cursor. This is the proper AppKit mechanism
-/// and won't fight with SwiftUI's internal cursor management.
-struct PointingHandCursor: NSViewRepresentable {
-  func makeNSView(context: Context) -> NSView {
-    let view = CursorView()
-    view.wantsLayer = true
-    return view
-  }
-
-  func updateNSView(_ nsView: NSView, context: Context) {
-    nsView.window?.invalidateCursorRects(for: nsView)
-  }
-
-  private class CursorView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? {
-      return nil  // Let clicks pass through to the SwiftUI button underneath
-    }
-
-    override func resetCursorRects() {
-      addCursorRect(bounds, cursor: .pointingHand)
-    }
-  }
-}
-
 extension View {
-  /// Shows pointing hand cursor via AppKit cursor rects (reliable).
+  /// Shows pointing hand cursor on hover.
   func pointerOnHover() -> some View {
-    self.overlay(PointingHandCursor())
+    self.onHover { inside in
+      if inside {
+        NSCursor.pointingHand.set()
+      } else {
+        NSCursor.arrow.set()
+      }
+    }
   }
 
   /// Shows pointing hand cursor + subtle background highlight on hover.
@@ -626,9 +607,13 @@ private struct HoverHighlightModifier: ViewModifier {
           .fill(isHovered ? Color.primary.opacity(0.06) : Color.clear)
           .padding(.horizontal, 4)
       )
-      .overlay(PointingHandCursor())
       .onHover { hovering in
         isHovered = hovering
+        if hovering {
+          NSCursor.pointingHand.set()
+        } else {
+          NSCursor.arrow.set()
+        }
       }
   }
 }
