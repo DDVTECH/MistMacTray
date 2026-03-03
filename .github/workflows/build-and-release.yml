@@ -18,6 +18,8 @@ on:
 #   DEVELOPER_ID               - Developer ID common name (e.g. "Your Name (XXXXXXXXXX)")
 #   APPLE_ID                   - Apple ID email for notarization
 #   APP_SPECIFIC_PASSWORD      - App-specific password for notarization
+#   HOMEBREW_APP_ID             - GitHub App ID (installed on DDVTECH/homebrew-mistserver)
+#   HOMEBREW_APP_PRIVATE_KEY   - GitHub App private key (PEM)
 
 env:
   XCODE_PROJECT: MistTray.xcodeproj
@@ -157,6 +159,39 @@ jobs:
             ${{ runner.temp }}/MistTray-${{ env.VERSION }}.dmg.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate GitHub App token
+        if: startsWith(github.ref, 'refs/tags/')
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.HOMEBREW_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          owner: DDVTECH
+          repositories: homebrew-mistserver
+
+      - name: Update Homebrew cask
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          SHA256=$(awk '{print $1}' "$RUNNER_TEMP/$APP_NAME-$VERSION.zip.sha256")
+          CLEAN_VERSION=${VERSION#v}
+
+          git clone --depth 1 https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/DDVTECH/homebrew-mistserver.git "$RUNNER_TEMP/homebrew-tap"
+          cd "$RUNNER_TEMP/homebrew-tap"
+
+          sed -i '' -E "s|^  version \".*\"|  version \"$CLEAN_VERSION\"|" Casks/misttray.rb
+          sed -i '' -E "s|^  sha256 \".*\"|  sha256 \"$SHA256\"|" Casks/misttray.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git diff)" ]; then
+            git add Casks/misttray.rb
+            git commit -m "Update MistTray to v$CLEAN_VERSION"
+            git push origin HEAD:main
+            echo "Updated Homebrew cask to v$CLEAN_VERSION (sha256: $SHA256)"
+          else
+            echo "Homebrew cask already up-to-date."
+          fi
 
       - name: Cleanup
         if: always()
