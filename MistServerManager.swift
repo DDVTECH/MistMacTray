@@ -550,7 +550,8 @@ class MistServerManager {
         }
       }
 
-      DispatchQueue.main.async { completion(tagName, downloadURL) }
+      let version = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+      DispatchQueue.main.async { completion(version, downloadURL) }
     }.resume()
   }
 
