@@ -466,4 +466,232 @@ class MistServerManager {
       return ""
     }
   }
+
+  // MARK: - Version Checking
+
+  /// Compare two version strings like "3.10" vs "3.9.2".
+  /// Returns positive if a > b, negative if a < b, 0 if equal.
+  static func compareVersions(_ a: String, _ b: String) -> Int {
+    let aParts = a.components(separatedBy: ".").compactMap { Int($0) }
+    let bParts = b.components(separatedBy: ".").compactMap { Int($0) }
+    let maxLen = max(aParts.count, bParts.count)
+    for i in 0..<maxLen {
+      let aVal = i < aParts.count ? aParts[i] : 0
+      let bVal = i < bParts.count ? bParts[i] : 0
+      if aVal != bVal { return aVal - bVal }
+    }
+    return 0
+  }
+
+  func checkLatestMistServerVersion(
+    mode: ServerMode, completion: @escaping (String?) -> Void
+  ) {
+    if case .brew = mode {
+      checkBrewLatestVersion(completion: completion)
+    } else {
+      fetchGitHubLatestTag(owner: "DDVTECH", repo: "mistserver", completion: completion)
+    }
+  }
+
+  /// Check the latest available version in the Homebrew tap
+  private func checkBrewLatestVersion(completion: @escaping (String?) -> Void) {
+    guard let brewPath = findBrew() else {
+      completion(nil)
+      return
+    }
+    DispatchQueue.global(qos: .utility).async { [weak self] in
+      guard let self = self else { return }
+      let output = self.runShellCommandWithOutput(
+        brewPath, arguments: ["info", "--json=v2", "mistserver"])
+      guard !output.isEmpty,
+        let data = output.data(using: .utf8),
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let formulae = json["formulae"] as? [[String: Any]],
+        let formula = formulae.first,
+        let versions = formula["versions"] as? [String: Any],
+        let stable = versions["stable"] as? String
+      else {
+        DispatchQueue.main.async { completion(nil) }
+        return
+      }
+      DispatchQueue.main.async { completion(stable) }
+    }
+  }
+
+  func checkLatestMistTrayRelease(completion: @escaping (String?, URL?) -> Void) {
+    let urlString = "https://api.github.com/repos/DDVTECH/MistMacTray/releases/latest"
+    guard let url = URL(string: urlString) else {
+      completion(nil, nil)
+      return
+    }
+
+    var request = URLRequest(url: url)
+    request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+    request.timeoutInterval = 15.0
+
+    URLSession.shared.dataTask(with: request) { data, _, error in
+      guard let data = data, error == nil,
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let tagName = json["tag_name"] as? String
+      else {
+        DispatchQueue.main.async { completion(nil, nil) }
+        return
+      }
+
+      var downloadURL: URL?
+      if let assets = json["assets"] as? [[String: Any]] {
+        for asset in assets {
+          if let name = asset["name"] as? String, name.hasSuffix(".zip"),
+            let urlStr = asset["browser_download_url"] as? String
+          {
+            downloadURL = URL(string: urlStr)
+            break
+          }
+        }
+      }
+
+      DispatchQueue.main.async { completion(tagName, downloadURL) }
+    }.resume()
+  }
+
+  func downloadAndInstallTrayUpdate(from url: URL, completion: @escaping (Bool) -> Void) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("MistTrayUpdate-\(UUID().uuidString)")
+
+      do {
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+      } catch {
+        print("[Update] Failed to create temp dir: \(error)")
+        DispatchQueue.main.async { completion(false) }
+        return
+      }
+
+      // Download
+      let semaphore = DispatchSemaphore(value: 0)
+      var downloadedURL: URL?
+      let task = URLSession.shared.downloadTask(with: url) { localURL, _, error in
+        if let localURL = localURL, error == nil {
+          let zipPath = tempDir.appendingPathComponent("update.zip")
+          try? FileManager.default.moveItem(at: localURL, to: zipPath)
+          downloadedURL = zipPath
+        }
+        semaphore.signal()
+      }
+      task.resume()
+      semaphore.wait()
+
+      guard let zipPath = downloadedURL else {
+        print("[Update] Download failed")
+        try? FileManager.default.removeItem(at: tempDir)
+        DispatchQueue.main.async { completion(false) }
+        return
+      }
+
+      // Unzip
+      let extractDir = tempDir.appendingPathComponent("extracted")
+      let unzipStatus = self.runShellCommand(
+        "/usr/bin/unzip", arguments: ["-o", zipPath.path, "-d", extractDir.path])
+      guard unzipStatus == 0 else {
+        print("[Update] Unzip failed with status \(unzipStatus)")
+        try? FileManager.default.removeItem(at: tempDir)
+        DispatchQueue.main.async { completion(false) }
+        return
+      }
+
+      // Find the .app bundle
+      guard
+        let contents = try? FileManager.default.contentsOfDirectory(
+          at: extractDir, includingPropertiesForKeys: nil),
+        let newApp = contents.first(where: { $0.pathExtension == "app" })
+      else {
+        print("[Update] No .app bundle found in zip")
+        try? FileManager.default.removeItem(at: tempDir)
+        DispatchQueue.main.async { completion(false) }
+        return
+      }
+
+      // Verify codesign identity matches
+      let currentApp = Bundle.main.bundlePath
+      let currentAuthority = self.codesignAuthority(currentApp)
+      let newAuthority = self.codesignAuthority(newApp.path)
+
+      if !currentAuthority.isEmpty && !newAuthority.isEmpty
+        && currentAuthority != newAuthority
+      {
+        print("[Update] Codesign mismatch: current=\(currentAuthority), new=\(newAuthority)")
+        try? FileManager.default.removeItem(at: tempDir)
+        DispatchQueue.main.async { completion(false) }
+        return
+      }
+
+      // Replace app bundle
+      let appURL = URL(fileURLWithPath: currentApp)
+      do {
+        let backupURL = tempDir.appendingPathComponent("MistTray-backup.app")
+        try FileManager.default.moveItem(at: appURL, to: backupURL)
+        try FileManager.default.moveItem(at: newApp, to: appURL)
+      } catch {
+        print("[Update] Failed to swap app: \(error)")
+        try? FileManager.default.removeItem(at: tempDir)
+        DispatchQueue.main.async { completion(false) }
+        return
+      }
+
+      // Relaunch new version
+      let executablePath = currentApp + "/Contents/MacOS/MistTray"
+      let relaunchTask = Process()
+      relaunchTask.executableURL = URL(fileURLWithPath: executablePath)
+      try? relaunchTask.run()
+
+      DispatchQueue.main.async { completion(true) }
+    }
+  }
+
+  private func codesignAuthority(_ appPath: String) -> String {
+    // codesign outputs to stderr, so we need to capture that
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+    task.arguments = ["-dvvv", appPath]
+    let pipe = Pipe()
+    task.standardError = pipe
+    task.standardOutput = FileHandle.nullDevice
+    do {
+      try task.run()
+      let data = pipe.fileHandleForReading.readDataToEndOfFile()
+      task.waitUntilExit()
+      let result = String(data: data, encoding: .utf8) ?? ""
+      // Extract Authority= lines
+      return result.components(separatedBy: "\n")
+        .filter { $0.hasPrefix("Authority=") }
+        .joined(separator: "\n")
+    } catch {
+      return ""
+    }
+  }
+
+  private func fetchGitHubLatestTag(
+    owner: String, repo: String, completion: @escaping (String?) -> Void
+  ) {
+    let urlString = "https://api.github.com/repos/\(owner)/\(repo)/releases/latest"
+    guard let url = URL(string: urlString) else {
+      completion(nil)
+      return
+    }
+
+    var request = URLRequest(url: url)
+    request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+    request.timeoutInterval = 15.0
+
+    URLSession.shared.dataTask(with: request) { data, _, error in
+      guard let data = data, error == nil,
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let tagName = json["tag_name"] as? String
+      else {
+        DispatchQueue.main.async { completion(nil) }
+        return
+      }
+      DispatchQueue.main.async { completion(tagName) }
+    }.resume()
+  }
 }

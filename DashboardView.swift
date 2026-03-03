@@ -20,6 +20,12 @@ struct DashboardView: View {
             Divider()
             SetupFormInline(appState: appState)
           }
+        } else if appState.needsAuth && appState.serverRunning {
+          VStack(spacing: 0) {
+            serverStatusHeader
+            Divider()
+            LoginFormInline(appState: appState)
+          }
         } else {
           ScrollView {
             VStack(spacing: 0) {
@@ -27,6 +33,12 @@ struct DashboardView: View {
               Divider()
               if appState.serverMode == .external && appState.serverRunning {
                 externalModeBanner
+              }
+              if appState.mistServerUpdateAvailable {
+                mistServerUpdateBanner
+              }
+              if appState.mistTrayUpdateAvailable {
+                mistTrayUpdateBanner
               }
               serverActions
               Divider()
@@ -44,7 +56,7 @@ struct DashboardView: View {
         case .createStream:
           CreateStreamForm(appState: appState) { path.removeLast() }
         case .editStream(let name):
-          EditStreamForm(appState: appState, streamName: name) { path.removeLast() }
+          StreamEditWizardView(appState: appState, originalName: name) { path.removeLast() }
         case .streamDetail(let name):
           StreamDetailView(appState: appState, streamName: name, path: $path)
         case .createPush:
@@ -59,17 +71,42 @@ struct DashboardView: View {
           AddAutoPushRuleForm { path.removeLast() }
         case .autoPushRules:
           AutoPushRulesView(appState: appState, path: $path)
-        case .protocolConfig(let name):
-          ProtocolConfigForm(protocolName: name) { path.removeLast() }
+        case .protocolConfig(let name, let index):
+          ProtocolConfigForm(appState: appState, protocolName: name, protocolIndex: index) { path.removeLast() }
         case .pushSettings:
           PushSettingsForm { path.removeLast() }
         case .clients:
           ClientsView(appState: appState)
         case .logs:
           LogsView(appState: appState)
+        case .pushWizard:
+          PushWizardView(appState: appState) { path.removeLast() }
+        case .streamWizard:
+          StreamWizardView(appState: appState) { path.removeLast() }
+        case .protocols:
+          ProtocolsView(appState: appState, path: $path)
+        case .triggers:
+          TriggersView(appState: appState, path: $path)
+        case .variables:
+          VariablesView(appState: appState)
+        case .externalWriters:
+          ExternalWritersView(appState: appState)
+        case .jwkManagement:
+          JWKManagementView(appState: appState)
+        case .cameras:
+          CamerasView(appState: appState)
+        case .embedURLs(let name):
+          EmbedURLsView(appState: appState, streamName: name)
+        case .triggerWizard:
+          TriggerWizardView(appState: appState) { path.removeLast() }
+        case .editTrigger(let event, let index):
+          TriggerEditView(appState: appState, eventName: event, handlerIndex: index) { path.removeLast() }
+        case .streamKeys:
+          StreamKeysView(appState: appState)
         }
       }
     }
+    .tint(Color.tnAccent)
     .frame(width: 380, height: 520)
     .background(.regularMaterial)
     .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -80,15 +117,25 @@ struct DashboardView: View {
   private var serverStatusHeader: some View {
     HStack(spacing: 12) {
       Circle()
-        .fill(appState.serverRunning ? Color.green : Color.red)
+        .fill(appState.serverRunning ? Color.tnGreen : Color.tnRed)
         .frame(width: 10, height: 10)
 
       VStack(alignment: .leading, spacing: 2) {
         Text("MistServer")
           .font(.headline)
-        Text(serverStatusText)
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        HStack(spacing: 6) {
+          Text(serverStatusText)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          if appState.serverRunning && !appState.serverCapabilities.isEmpty {
+            Text("CPU \(DataProcessor.shared.formatPercentage(appState.cpuUsagePercent))")
+              .font(.system(size: 9, weight: .medium, design: .rounded))
+              .foregroundStyle(appState.cpuUsagePercent > 80 ? Color.tnOrange : Color.secondary)
+            Text("MEM \(DataProcessor.shared.formatPercentage(appState.memoryPercent))")
+              .font(.system(size: 9, weight: .medium, design: .rounded))
+              .foregroundStyle(appState.memoryPercent > 80 ? Color.tnOrange : Color.secondary)
+          }
+        }
       }
 
       Spacer()
@@ -139,11 +186,99 @@ struct DashboardView: View {
       Text("Connected to an external instance. Start/restart controls are limited.")
         .font(.caption2)
     }
-    .foregroundStyle(.orange)
+    .foregroundStyle(Color.tnOrange)
     .padding(.horizontal, 16)
     .padding(.vertical, 6)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.orange.opacity(0.1))
+    .background(Color.tnOrange.opacity(0.1))
+  }
+
+  // MARK: - Update Banners
+
+  private var mistServerUpdateBanner: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "arrow.up.circle.fill")
+        .font(.caption2)
+      VStack(alignment: .leading, spacing: 1) {
+        Text("MistServer \(appState.mistServerLatestVersion ?? "") available")
+          .font(.caption2)
+        if let current = appState.mistServerBaseVersion {
+          Text("Current: \(current)")
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+        }
+      }
+      Spacer()
+      if appState.serverMode == .brew {
+        Button {
+          updateMistServerBrew()
+        } label: {
+          Text("Update")
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Color.tnAccent.opacity(0.2))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .pointerOnHover()
+      }
+    }
+    .foregroundStyle(Color.tnAccent)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.tnAccent.opacity(0.1))
+  }
+
+  private var mistTrayUpdateBanner: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "arrow.down.app.fill")
+        .font(.caption2)
+      Text("MistTray \(appState.mistTrayLatestVersion ?? "") available")
+        .font(.caption2)
+      Spacer()
+      if appState.isInstallingTrayUpdate {
+        ProgressView()
+          .controlSize(.small)
+      } else {
+        Button {
+          if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.installMistTrayUpdate()
+          }
+        } label: {
+          Text("Install")
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Color.tnGreen.opacity(0.2))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .pointerOnHover()
+      }
+    }
+    .foregroundStyle(Color.tnGreen)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.tnGreen.opacity(0.1))
+  }
+
+  private func updateMistServerBrew() {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let manager = MistServerManager.shared
+      guard let brewCmd = manager.findBrew() else { return }
+      manager.runShellCommand(brewCmd, arguments: ["upgrade", "mistserver"])
+      DispatchQueue.main.async { [self] in
+        if appState.serverRunning {
+          restartServer()
+        }
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+          appDelegate.checkForAllUpdates()
+        }
+      }
+    }
   }
 
   // MARK: - Server Actions
@@ -203,7 +338,7 @@ struct DashboardView: View {
         }
 
         Button {
-          if let url = URL(string: "http://localhost:4242") {
+          if let url = URL(string: appState.serverURL) {
             NSWorkspace.shared.open(url)
           }
         } label: {
@@ -286,6 +421,16 @@ struct DashboardView: View {
     }
   }
 
+  private func statusColor(_ name: String) -> Color {
+    switch name {
+    case "green": return .tnGreen
+    case "yellow": return .tnYellow
+    case "orange": return .tnOrange
+    case "red": return .tnRed
+    default: return .gray
+    }
+  }
+
   // MARK: - Streams Section
 
   private var streamsSection: some View {
@@ -297,10 +442,10 @@ struct DashboardView: View {
         Spacer()
         if appState.serverRunning {
           Button {
-            path.append(Route.createStream)
+            path.append(Route.streamWizard)
           } label: {
             Image(systemName: "plus.circle.fill")
-              .foregroundStyle(.blue)
+              .foregroundStyle(Color.tnAccent)
               .frame(width: 24, height: 24)
               .contentShape(Rectangle())
           }
@@ -330,19 +475,27 @@ struct DashboardView: View {
       path.append(Route.streamDetail(name))
     } label: {
       HStack(spacing: 10) {
+        let status = appState.streamStatusLabel(name)
         Circle()
-          .fill(appState.isStreamOnline(name) ? Color.green : Color.gray.opacity(0.4))
+          .fill(statusColor(status.color))
           .frame(width: 8, height: 8)
 
         VStack(alignment: .leading, spacing: 2) {
           Text(name)
             .font(.system(.body, weight: .medium))
             .foregroundStyle(.primary)
-          Text(appState.streamSource(name))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
+          HStack(spacing: 4) {
+            if status.text != "Online" && status.text != "Offline" {
+              Text(status.text)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(statusColor(status.color))
+            }
+            Text(appState.streamSource(name))
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+              .truncationMode(.middle)
+          }
         }
 
         Spacer()
@@ -385,10 +538,10 @@ struct DashboardView: View {
         Spacer()
         if appState.serverRunning {
           Button {
-            path.append(Route.createPush)
+            path.append(Route.pushWizard)
           } label: {
             Image(systemName: "plus.circle.fill")
-              .foregroundStyle(.blue)
+              .foregroundStyle(Color.tnAccent)
               .frame(width: 24, height: 24)
               .contentShape(Rectangle())
           }
@@ -399,30 +552,149 @@ struct DashboardView: View {
       .padding(.horizontal, 16)
       .padding(.vertical, 8)
 
-      if appState.activePushes.isEmpty {
+      if appState.activePushes.isEmpty && appState.autoPushRules.isEmpty {
         Text("No active pushes")
           .font(.caption)
           .foregroundStyle(.tertiary)
           .padding(.horizontal, 16)
           .padding(.bottom, 8)
       } else {
-        ForEach(appState.sortedPushes, id: \.id) { push in
+        // Auto-push rules
+        if !appState.autoPushRules.isEmpty {
+          ForEach(Array(appState.autoPushRules.keys.sorted()), id: \.self) { ruleId in
+            if let rule = appState.autoPushRules[ruleId] as? [String: Any] {
+              autoPushRow(ruleId: ruleId, rule: rule)
+            }
+          }
+        }
+        // Active pushes
+        ForEach(appState.sortedEnhancedPushes) { push in
           pushRow(push: push)
         }
       }
     }
   }
 
-  private func pushRow(push: (id: Int, stream: String, target: String)) -> some View {
-    HStack(spacing: 8) {
+  private static let deactivationMarker = "\u{1F4A4}deactivated\u{1F4A4}_"
+
+  private func autoPushRow(ruleId: String, rule: [String: Any]) -> some View {
+    let rawStream = rule["stream"] as? String ?? "?"
+    let isDeactivated = rawStream.hasPrefix(Self.deactivationMarker)
+    let stream = isDeactivated ? String(rawStream.dropFirst(Self.deactivationMarker.count)) : rawStream
+    let target = rule["target"] as? String ?? "?"
+    let notes = rule["x-LSP-notes"] as? String
+
+    return HStack(spacing: 8) {
       VStack(alignment: .leading, spacing: 2) {
-        Text(push.stream)
-          .font(.system(.body, weight: .medium))
-        Text(push.target)
+        HStack(spacing: 4) {
+          Circle()
+            .fill(isDeactivated ? Color.gray : Color.tnAccent)
+            .frame(width: 6, height: 6)
+          Text("Auto")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundColor(isDeactivated ? .secondary : .tnAccent)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background((isDeactivated ? Color.gray : Color.tnAccent).opacity(0.15))
+            .clipShape(Capsule())
+          Text(stream)
+            .font(.system(.body, weight: .medium))
+            .foregroundStyle(isDeactivated ? .secondary : .primary)
+        }
+        Text(target)
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .truncationMode(.middle)
+        if let notes = notes, !notes.isEmpty {
+          Text(notes)
+            .font(.system(size: 10))
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+        }
+      }
+
+      Spacer()
+
+      // Toggle enable/disable
+      Button {
+        toggleAutoPush(ruleId: ruleId, rule: rule, currentlyDeactivated: isDeactivated)
+      } label: {
+        Image(systemName: isDeactivated ? "play.circle" : "pause.circle")
+          .foregroundStyle(isDeactivated ? .green : .orange)
+          .frame(width: 20, height: 20)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .pointerOnHover()
+
+      Button {
+        APIClient.shared.deleteAutoPushRule(ruleId: ruleId) { _ in
+          DispatchQueue.main.async { appState.onDataChanged?() }
+        }
+      } label: {
+        Image(systemName: "xmark.circle.fill")
+          .foregroundStyle(.secondary)
+          .frame(width: 20, height: 20)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .pointerOnHover()
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+  }
+
+  private func toggleAutoPush(ruleId: String, rule: [String: Any], currentlyDeactivated: Bool) {
+    var updatedRule = rule
+    let rawStream = rule["stream"] as? String ?? ""
+    if currentlyDeactivated {
+      // Activate: remove prefix
+      updatedRule["stream"] = String(rawStream.dropFirst(Self.deactivationMarker.count))
+    } else {
+      // Deactivate: add prefix
+      updatedRule["stream"] = Self.deactivationMarker + rawStream
+    }
+    // Remove then re-add with updated stream
+    APIClient.shared.deleteAutoPushRule(ruleId: ruleId) { _ in
+      APIClient.shared.addAutoPush(updatedRule) { _ in
+        DispatchQueue.main.async { self.appState.onDataChanged?() }
+      }
+    }
+  }
+
+  private func pushRow(push: AppState.EnhancedPush) -> some View {
+    HStack(spacing: 8) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(push.stream)
+          .font(.system(.body, weight: .medium))
+        Text(push.resolvedTarget != push.target ? push.resolvedTarget : push.target)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+        HStack(spacing: 8) {
+          if push.activeMs > 0 {
+            Text(DataProcessor.shared.formatDuration(push.activeMs / 1000))
+              .font(.system(size: 10, design: .rounded))
+              .foregroundStyle(.secondary)
+          }
+          if push.bytes > 0 {
+            Text(DataProcessor.shared.formatBytes(push.bytes))
+              .font(.system(size: 10, design: .rounded))
+              .foregroundStyle(.secondary)
+          }
+          if push.latency > 0 {
+            Text("\(push.latency)ms")
+              .font(.system(size: 10, design: .rounded))
+              .foregroundStyle(push.latency > 1000 ? .orange : .secondary)
+          }
+          if push.pktLossCount > 0 {
+            Text("loss:\(push.pktLossCount)")
+              .font(.system(size: 10, design: .rounded))
+              .foregroundStyle(.red)
+          }
+        }
       }
 
       Spacer()
@@ -433,9 +705,10 @@ struct DashboardView: View {
       } else {
         Button {
           appState.isStoppingPush.insert(push.id)
-          PushManager.shared.stopPush(pushId: push.id) { result in
+          PushManager.shared.stopPush(pushId: push.id) { _ in
             DispatchQueue.main.async {
               appState.isStoppingPush.remove(push.id)
+              appState.onDataChanged?()
             }
           }
         } label: {
@@ -456,7 +729,7 @@ struct DashboardView: View {
 
   private var footerActions: some View {
     VStack(spacing: 6) {
-      HStack(spacing: 12) {
+      HStack(spacing: 10) {
         footerButton("Auto-Push", icon: "arrow.triangle.2.circlepath") {
           path.append(Route.autoPushRules)
         }
@@ -467,22 +740,57 @@ struct DashboardView: View {
         }
         .disabled(!appState.serverRunning)
 
-        footerButton("Logs", icon: "doc.text") {
-          path.append(Route.logs)
+        footerButton("Protocols", icon: "network") {
+          path.append(Route.protocols)
+        }
+        .disabled(!appState.serverRunning)
+
+        footerButton("Triggers", icon: "bolt.fill") {
+          path.append(Route.triggers)
         }
         .disabled(!appState.serverRunning)
 
         Spacer()
       }
 
-      HStack(spacing: 12) {
+      HStack(spacing: 10) {
         footerButton("Stats", icon: "chart.bar") {
           path.append(Route.statistics)
         }
 
+        footerButton("Logs", icon: "doc.text") {
+          path.append(Route.logs)
+        }
+        .disabled(!appState.serverRunning)
+
         footerButton("Settings", icon: "gear") {
           path.append(Route.settings)
         }
+
+        Menu {
+          Button { path.append(Route.variables) } label: {
+            Label("Variables", systemImage: "textformat.abc")
+          }
+          Button { path.append(Route.externalWriters) } label: {
+            Label("External Writers", systemImage: "cloud")
+          }
+          Button { path.append(Route.jwkManagement) } label: {
+            Label("JSON Web Keys", systemImage: "key")
+          }
+          Button { path.append(Route.streamKeys) } label: {
+            Label("Stream Keys", systemImage: "lock.shield")
+          }
+          // Cameras & Devices - hidden until merged upstream
+          // Button { path.append(Route.cameras) } label: {
+          //   Label("Cameras & Devices", systemImage: "video")
+          // }
+        } label: {
+          Label("More", systemImage: "ellipsis.circle")
+            .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(!appState.serverRunning)
 
         Spacer()
 
@@ -527,15 +835,27 @@ enum Route: Hashable {
   case editStream(String)
   case streamDetail(String)
   case createPush
+  case pushWizard
+  case streamWizard
   case settings
   case statistics
   case addStreamTag(String)
   case addAutoPushRule
   case autoPushRules
-  case protocolConfig(String)
+  case protocolConfig(String, Int)
   case pushSettings
   case clients
   case logs
+  case protocols
+  case triggers
+  case variables
+  case externalWriters
+  case jwkManagement
+  case cameras
+  case embedURLs(String)
+  case triggerWizard
+  case editTrigger(String, Int)
+  case streamKeys
 }
 
 // MARK: - Reusable Navigation Header
@@ -560,7 +880,7 @@ struct NavHeader: View {
       }
       .buttonStyle(.plain)
       .pointerOnHover()
-      .foregroundStyle(.blue)
+      .foregroundStyle(Color.tnAccent)
 
       Spacer()
 
@@ -616,4 +936,27 @@ private struct HoverHighlightModifier: ViewModifier {
         }
       }
   }
+}
+
+// MARK: - Tokyo Night Color Palette
+
+extension Color {
+  /// Soft blue — primary interactive accent (#7aa2f7)
+  static let tnAccent = Color(red: 0.478, green: 0.635, blue: 0.969)
+  /// Subtle accent background
+  static let tnAccentBg = Color(red: 0.478, green: 0.635, blue: 0.969).opacity(0.12)
+  /// Green — online / success (#9ece6a)
+  static let tnGreen = Color(red: 0.620, green: 0.808, blue: 0.416)
+  /// Red-pink — error / destructive (#f7768e)
+  static let tnRed = Color(red: 0.969, green: 0.463, blue: 0.557)
+  /// Orange — caution / warning (#ff9e64)
+  static let tnOrange = Color(red: 1.0, green: 0.620, blue: 0.392)
+  /// Yellow — initializing / pending (#e0af68)
+  static let tnYellow = Color(red: 0.878, green: 0.686, blue: 0.408)
+  /// Purple — pushes / secondary accent (#bb9af7)
+  static let tnPurple = Color(red: 0.733, green: 0.604, blue: 0.969)
+  /// Cyan — info badges / protocols (#7dcfff)
+  static let tnCyan = Color(red: 0.490, green: 0.812, blue: 1.0)
+  /// Teal — alternate highlight (#73daca)
+  static let tnTeal = Color(red: 0.451, green: 0.855, blue: 0.792)
 }

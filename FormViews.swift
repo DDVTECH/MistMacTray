@@ -38,7 +38,7 @@ struct CreateStreamForm: View {
       if let error = errorMessage {
         Text(error)
           .font(.caption)
-          .foregroundStyle(.red)
+          .foregroundColor(Color.tnRed)
       }
 
       HStack {
@@ -63,6 +63,7 @@ struct CreateStreamForm: View {
         isSubmitting = false
         switch result {
         case .success:
+          appState.onDataChanged?()
           dismiss()
         case .failure(let error):
           errorMessage = error.localizedDescription
@@ -102,7 +103,7 @@ struct EditStreamForm: View {
       if let error = errorMessage {
         Text(error)
           .font(.caption)
-          .foregroundStyle(.red)
+          .foregroundColor(Color.tnRed)
       }
 
       HStack {
@@ -132,6 +133,7 @@ struct EditStreamForm: View {
         isSubmitting = false
         switch result {
         case .success:
+          appState.onDataChanged?()
           dismiss()
         case .failure(let error):
           errorMessage = error.localizedDescription
@@ -180,7 +182,7 @@ struct CreatePushForm: View {
       if let error = errorMessage {
         Text(error)
           .font(.caption)
-          .foregroundStyle(.red)
+          .foregroundColor(Color.tnRed)
       }
 
       HStack {
@@ -209,6 +211,7 @@ struct CreatePushForm: View {
         isSubmitting = false
         switch result {
         case .success:
+          appState.onDataChanged?()
           dismiss()
         case .failure(let error):
           errorMessage = error.localizedDescription
@@ -221,63 +224,128 @@ struct CreatePushForm: View {
 // MARK: - Protocol Config Form
 
 struct ProtocolConfigForm: View {
+  @Bindable var appState: AppState
   let protocolName: String
+  let protocolIndex: Int
   var dismiss: () -> Void
 
   @State private var port: String = ""
   @State private var interfaceAddr: String = "0.0.0.0"
+  @State private var extraFields: [(key: String, label: String, value: String)] = []
   @State private var isSubmitting = false
   @State private var errorMessage: String?
 
+  private var originalConfig: [String: Any] {
+    guard protocolIndex < appState.configuredProtocols.count else { return [:] }
+    return appState.configuredProtocols[protocolIndex]
+  }
+
   var body: some View {
-    Form {
-      Section {
-        TextField("Port number", text: $port)
-          .textFieldStyle(.roundedBorder)
-      } header: {
-        Text("Port")
-      }
+    VStack(spacing: 0) {
+      NavHeader(title: "\(protocolName) Config")
+      Divider()
 
-      Section {
-        TextField("0.0.0.0 (all interfaces)", text: $interfaceAddr)
-          .textFieldStyle(.roundedBorder)
-      } header: {
-        Text("Interface")
-      }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Port").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            TextField("Port number", text: $port)
+              .textFieldStyle(.roundedBorder)
+          }
 
-      if let error = errorMessage {
-        Text(error)
-          .font(.caption)
-          .foregroundStyle(.red)
-      }
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Interface").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            TextField("0.0.0.0 (all interfaces)", text: $interfaceAddr)
+              .textFieldStyle(.roundedBorder)
+            Text("Leave as 0.0.0.0 to listen on all interfaces")
+              .font(.system(size: 9)).foregroundStyle(.secondary)
+          }
 
-      HStack {
-        Spacer()
-        Button("Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        Button("Configure") { configure() }
-          .keyboardShortcut(.defaultAction)
-          .disabled(port.trimmed.isEmpty || isSubmitting)
+          // Dynamic fields from capabilities
+          ForEach(Array(extraFields.enumerated()), id: \.offset) { index, field in
+            VStack(alignment: .leading, spacing: 4) {
+              Text(field.label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+              TextField("", text: Binding(
+                get: { extraFields[index].value },
+                set: { extraFields[index].value = $0 }
+              ))
+              .textFieldStyle(.roundedBorder)
+            }
+          }
+
+          if let error = errorMessage {
+            Text(error).font(.caption).foregroundColor(Color.tnRed)
+          }
+
+          HStack {
+            Button("Cancel") { dismiss() }
+              .buttonStyle(.bordered).controlSize(.small).pointerOnHover()
+            Spacer()
+            Button("Save") { saveConfig() }
+              .buttonStyle(.borderedProminent).controlSize(.small).pointerOnHover()
+              .disabled(port.trimmed.isEmpty || isSubmitting)
+          }
+        }
+        .padding(16)
       }
     }
-    .formStyle(.grouped)
-    .navigationTitle("\(protocolName) Config")
+    .navigationBarBackButtonHidden(true)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .onAppear {
-      port = UtilityManager.shared.getDefaultPort(for: protocolName)
+    .onAppear { prefill() }
+  }
+
+  private func prefill() {
+    let config = originalConfig
+    port = (config["port"] as? Int).map(String.init) ?? UtilityManager.shared.getDefaultPort(for: protocolName)
+    interfaceAddr = config["interface"] as? String ?? "0.0.0.0"
+
+    // Load optional fields from capabilities
+    if let connInfo = appState.availableConnectors[protocolName] as? [String: Any],
+       let optional = connInfo["optional"] as? [String: Any] {
+      let skip: Set<String> = ["port", "interface", "connector"]
+      extraFields = optional.keys.sorted().compactMap { key in
+        guard !skip.contains(key) else { return nil }
+        let info = optional[key] as? [String: Any]
+        let label = info?["name"] as? String ?? key
+        let current = config[key].map { "\($0)" } ?? ""
+        return (key: key, label: label, value: current)
+      }
     }
   }
 
-  private func configure() {
-    guard Int(port.trimmed) != nil else {
+  private func saveConfig() {
+    guard let portNum = Int(port.trimmed) else {
       errorMessage = "Please enter a valid port number."
       return
     }
-    // Protocol configuration requires MistServer web UI for now
-    if let url = URL(string: "http://localhost:4242") {
-      NSWorkspace.shared.open(url)
+    isSubmitting = true
+    errorMessage = nil
+
+    var updated = originalConfig
+    updated["port"] = portNum
+    let iface = interfaceAddr.trimmed
+    updated["interface"] = iface.isEmpty ? "0.0.0.0" : iface
+    for field in extraFields where !field.value.isEmpty {
+      // Try to preserve type (int vs string)
+      if let intVal = Int(field.value) {
+        updated[field.key] = intVal
+      } else {
+        updated[field.key] = field.value
+      }
     }
-    dismiss()
+
+    APIClient.shared.updateProtocol(original: originalConfig, updated: updated) { result in
+      DispatchQueue.main.async {
+        isSubmitting = false
+        switch result {
+        case .success:
+          appState.onDataChanged?()
+          dismiss()
+        case .failure(let error):
+          errorMessage = error.localizedDescription
+        }
+      }
+    }
   }
 }
 
@@ -306,7 +374,7 @@ struct AddStreamTagForm: View {
       if let error = errorMessage {
         Text(error)
           .font(.caption)
-          .foregroundStyle(.red)
+          .foregroundColor(Color.tnRed)
       }
 
       HStack {
@@ -331,6 +399,7 @@ struct AddStreamTagForm: View {
         isSubmitting = false
         switch result {
         case .success:
+          (NSApp.delegate as? AppDelegate)?.refreshAllData()
           dismiss()
         case .failure(let error):
           errorMessage = error.localizedDescription
@@ -375,7 +444,7 @@ struct AddAutoPushRuleForm: View {
       if let error = errorMessage {
         Text(error)
           .font(.caption)
-          .foregroundStyle(.red)
+          .foregroundColor(Color.tnRed)
       }
 
       HStack {
@@ -407,6 +476,7 @@ struct AddAutoPushRuleForm: View {
         isSubmitting = false
         switch result {
         case .success:
+          (NSApp.delegate as? AppDelegate)?.refreshAllData()
           dismiss()
         case .failure(let error):
           errorMessage = error.localizedDescription
@@ -450,7 +520,7 @@ struct PushSettingsForm: View {
       if let error = errorMessage {
         Text(error)
           .font(.caption)
-          .foregroundStyle(.red)
+          .foregroundColor(Color.tnRed)
       }
 
       HStack {
@@ -480,6 +550,7 @@ struct PushSettingsForm: View {
         isSubmitting = false
         switch result {
         case .success:
+          (NSApp.delegate as? AppDelegate)?.refreshAllData()
           dismiss()
         case .failure(let error):
           errorMessage = error.localizedDescription
@@ -546,19 +617,19 @@ struct SetupFormInline: View {
           if !confirmPassword.isEmpty && password != confirmPassword {
             Text("Passwords do not match")
               .font(.caption)
-              .foregroundStyle(.red)
+              .foregroundColor(Color.tnRed)
           }
           if !password.isEmpty && password.count < 4 {
             Text("Password must be at least 4 characters")
               .font(.caption)
-              .foregroundStyle(.orange)
+              .foregroundColor(Color.tnOrange)
           }
         }
 
         if let error = errorMessage {
           Text(error)
             .font(.caption)
-            .foregroundStyle(.red)
+            .foregroundColor(Color.tnRed)
         }
 
         Button {
@@ -597,34 +668,146 @@ struct SetupFormInline: View {
             let status = authorize["status"] as? String
           {
             if status == "ACC_MADE" || status == "OK" {
-              appState.needsSetup = false
-              // Reset responder chain: the setup form's text fields held first
-              // responder and are now gone, which breaks click handling in the
-              // borderless panel. Give it back to the content view.
-              DispatchQueue.main.async {
-                if let w = NSApp.keyWindow {
-                  w.makeFirstResponder(w.contentView)
-                }
-              }
-              if let appDelegate = NSApp.delegate as? AppDelegate {
-                appDelegate.refreshAllData()
-              }
+              completeSetup()
             } else {
               errorMessage = "Unexpected response: \(status)"
             }
           } else {
-            appState.needsSetup = false
-            DispatchQueue.main.async {
-              if let w = NSApp.keyWindow {
-                w.makeFirstResponder(w.contentView)
-              }
-            }
-            if let appDelegate = NSApp.delegate as? AppDelegate {
-              appDelegate.refreshAllData()
-            }
+            completeSetup()
           }
         case .failure(let error):
           errorMessage = error.localizedDescription
+        }
+      }
+    }
+  }
+
+  private func completeSetup() {
+    appState.needsSetup = false
+    // Reset responder chain so click handling works in the borderless panel
+    DispatchQueue.main.async {
+      if let w = NSApp.keyWindow {
+        w.makeFirstResponder(w.contentView)
+      }
+    }
+    if let appDelegate = NSApp.delegate as? AppDelegate {
+      // Enable default protocols (like LSP does), then refresh
+      appDelegate.enableDefaultProtocols {
+        appDelegate.refreshAllData()
+      }
+    }
+  }
+}
+
+// MARK: - Login Form (CHALL Auth)
+
+struct LoginFormInline: View {
+  @Bindable var appState: AppState
+
+  @State private var host = ""
+  @State private var username = ""
+  @State private var password = ""
+  @State private var isSubmitting = false
+  @State private var errorMessage: String?
+
+  private var isValid: Bool {
+    !username.trimmed.isEmpty && !password.isEmpty
+  }
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Authentication Required")
+            .font(.title3.weight(.semibold))
+          Text("This MistServer instance requires login credentials.")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+
+        VStack(alignment: .leading, spacing: 12) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Server")
+              .font(.caption.weight(.medium))
+              .foregroundStyle(.secondary)
+            TextField("http://localhost:4242", text: $host)
+              .textFieldStyle(.roundedBorder)
+              .font(.caption)
+              .onChange(of: host) {
+                let trimmed = host.trimmed
+                if !trimmed.isEmpty {
+                  appState.serverURL = trimmed
+                }
+              }
+          }
+
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Username")
+              .font(.caption.weight(.medium))
+              .foregroundStyle(.secondary)
+            TextField("admin", text: $username)
+              .textFieldStyle(.roundedBorder)
+          }
+
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Password")
+              .font(.caption.weight(.medium))
+              .foregroundStyle(.secondary)
+            SecureField("Password", text: $password)
+              .textFieldStyle(.roundedBorder)
+              .onSubmit { if isValid { login() } }
+          }
+        }
+
+        if let error = errorMessage {
+          Text(error)
+            .font(.caption)
+            .foregroundColor(Color.tnRed)
+        }
+
+        Button {
+          login()
+        } label: {
+          if isSubmitting {
+            HStack(spacing: 6) {
+              ProgressView()
+                .controlSize(.small)
+              Text("Logging in...")
+            }
+            .frame(maxWidth: .infinity)
+          } else {
+            Text("Log In")
+              .frame(maxWidth: .infinity)
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(!isValid || isSubmitting)
+      }
+      .padding(16)
+    }
+    .onAppear { host = appState.serverURL }
+  }
+
+  private func login() {
+    isSubmitting = true
+    errorMessage = nil
+
+    APIClient.shared.login(username: username.trimmed, rawPassword: password) { success, error in
+      DispatchQueue.main.async {
+        isSubmitting = false
+        if success {
+          appState.needsAuth = false
+          appState.authError = nil
+          // Reset responder chain
+          if let w = NSApp.keyWindow {
+            w.makeFirstResponder(w.contentView)
+          }
+          if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.refreshAllData()
+          }
+        } else {
+          errorMessage = error ?? "Login failed"
         }
       }
     }

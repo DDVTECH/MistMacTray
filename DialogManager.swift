@@ -11,6 +11,15 @@ class DialogManager: NSObject, NSWindowDelegate {
 
   private override init() { super.init() }
 
+  /// Activate the app and ensure the alert renders as a proper foreground window.
+  /// Required because we show alerts from a .nonActivatingPanel where the app
+  /// isn't the active application, causing default buttons to render without accent color.
+  private func activateForAlert(_ alert: NSAlert) {
+    NSApp.activate(ignoringOtherApps: true)
+    alert.window.level = .modalPanel
+    alert.window.makeKeyAndOrderFront(nil)
+  }
+
   func windowWillClose(_ notification: Notification) {
     NSApp.stopModal(withCode: .cancel)
   }
@@ -23,6 +32,7 @@ class DialogManager: NSObject, NSWindowDelegate {
     alert.informativeText = message
     alert.alertStyle = .informational
     alert.addButton(withTitle: "OK")
+    activateForAlert(alert)
     alert.runModal()
   }
 
@@ -32,6 +42,7 @@ class DialogManager: NSObject, NSWindowDelegate {
     alert.informativeText = message
     alert.alertStyle = .critical
     alert.addButton(withTitle: "OK")
+    activateForAlert(alert)
     alert.runModal()
   }
 
@@ -45,6 +56,7 @@ class DialogManager: NSObject, NSWindowDelegate {
     alert.alertStyle = .warning
     alert.addButton(withTitle: confirmButtonTitle)
     alert.addButton(withTitle: cancelButtonTitle)
+    activateForAlert(alert)
     return alert.runModal() == .alertFirstButtonReturn
   }
 
@@ -54,6 +66,7 @@ class DialogManager: NSObject, NSWindowDelegate {
     alert.informativeText = message
     alert.alertStyle = .informational
     alert.addButton(withTitle: "OK")
+    activateForAlert(alert)
     alert.runModal()
   }
 
@@ -121,6 +134,7 @@ class DialogManager: NSObject, NSWindowDelegate {
       confirmButton.hasDestructiveAction = true
     }
 
+    activateForAlert(alert)
     let response = alert.runModal()
     completion(response == .alertFirstButtonReturn)
   }

@@ -3,21 +3,49 @@
 //  MistTray
 //
 
+import CryptoKit
 import Foundation
 
 class APIClient {
   static let shared = APIClient()
 
-  private let baseURL = "http://localhost:4242/api"
+  var baseURL = "http://localhost:4242/api"
   private let session = URLSession.shared
 
+  // MARK: - Auth State
+  var authUsername = ""
+  var authPasswordHash = ""  // MD5(raw_password)
+  var authChallenge = ""
+
   private init() {}
+
+  private func md5(_ string: String) -> String {
+    let digest = Insecure.MD5.hash(data: Data(string.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Build the authorize block to include with every API call (mirrors LSP behavior).
+  private func authBlock() -> [String: Any] {
+    let password: String
+    if !authPasswordHash.isEmpty && !authChallenge.isEmpty {
+      password = md5(authPasswordHash + authChallenge)
+    } else {
+      password = ""
+    }
+    return ["username": authUsername, "password": password]
+  }
 
   // MARK: - Generic API Methods
 
   func makeAPICall<T>(_ apiCall: [String: Any], completion: @escaping (Result<T, APIError>) -> Void)
   {
-    guard let jsonData = try? JSONSerialization.data(withJSONObject: apiCall),
+    // Inject authorize block if caller didn't provide one (like LSP does with every request)
+    var enriched = apiCall
+    if enriched["authorize"] == nil {
+      enriched["authorize"] = authBlock()
+    }
+
+    guard let jsonData = try? JSONSerialization.data(withJSONObject: enriched),
       let url = URL(string: baseURL)
     else {
       completion(.failure(.invalidRequest))
@@ -28,13 +56,10 @@ class APIClient {
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = jsonData
-    request.timeoutInterval = 10.0
-
-    print("API Call: \(apiCall)")
+    request.timeoutInterval = 30.0
 
     session.dataTask(with: request) { data, response, error in
       if let error = error {
-        print("API Error: \(error)")
         DispatchQueue.main.async {
           completion(.failure(.networkError(error)))
         }
@@ -42,7 +67,6 @@ class APIClient {
       }
 
       guard let data = data else {
-        print("No data received")
         DispatchQueue.main.async {
           completion(.failure(.noData))
         }
@@ -50,8 +74,6 @@ class APIClient {
       }
 
       if let httpResponse = response as? HTTPURLResponse {
-        print("API Response status: \(httpResponse.statusCode)")
-
         if httpResponse.statusCode != 200 {
           DispatchQueue.main.async {
             completion(.failure(.httpError(httpResponse.statusCode)))
@@ -62,28 +84,15 @@ class APIClient {
 
       do {
         if let json = try JSONSerialization.jsonObject(with: data) as? T {
-          print("API Response: Success")
-
-          if let jsonDict = json as? [String: Any] {
-            print("Full API Response Data:")
-            for (key, value) in jsonDict {
-              print("\(key): \(value)")
-            }
-          }
-
           DispatchQueue.main.async {
             completion(.success(json))
           }
         } else {
-          print("Failed to parse response as expected type")
-          print("Raw response data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
           DispatchQueue.main.async {
             completion(.failure(.parseError))
           }
         }
       } catch {
-        print("JSON parsing error: \(error)")
-        print("Raw response data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
         DispatchQueue.main.async {
           completion(.failure(.parseError))
         }
@@ -104,7 +113,6 @@ class APIClient {
           let nsError = networkError as NSError
           if nsError.code == -1004 {  // Connection failed
             let delay = Double(retryCount + 1) * 2.0
-            print("Retrying API call in \(delay)s... (attempt \(retryCount + 1)/\(maxRetries))")
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
               self?.makeAPICallWithRetry(
                 apiCall, retryCount: retryCount + 1, maxRetries: maxRetries, completion: completion)
@@ -140,10 +148,17 @@ class APIClient {
     makeAPICall(apiCall, completion: completion)
   }
 
+  func updateStream(
+    name: String, config: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["addstream": [name: config]]
+    makeAPICall(apiCall, completion: completion)
+  }
+
   func deleteStream(
     _ streamName: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
   ) {
-    let apiCall = ["deletestream": streamName]
+    let apiCall: [String: Any] = ["deletestream": [streamName]]
     makeAPICall(apiCall, completion: completion)
   }
 
@@ -197,7 +212,7 @@ class APIClient {
   }
 
   func stopPush(pushId: Int, completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall: [String: Any] = ["push_stop": pushId]
+    let apiCall: [String: Any] = ["push_stop": [pushId]]
     makeAPICall(apiCall, completion: completion)
   }
 
@@ -269,13 +284,19 @@ class APIClient {
     let apiCall: [String: Any] = [
       "active_streams": true,
       "streams": true,
-      "stats_streams": true,
       "push_list": true,
+      "push_auto_list": true,
+      "push_settings": true,
       "config": true,
       "totals": true,
       "log": true,
+      "capabilities": true,
+      "variable_list": true,
+      "external_writer_list": true,
+      "jwks": true,
+      "streamkeys": true,
       "clients": [
-        "fields": ["host", "stream", "protocol", "conntime", "sessId"]
+        "fields": ["host", "stream", "protocol", "conntime", "downbps", "upbps"]
       ],
     ]
     makeAPICallWithRetry(apiCall, completion: completion)
@@ -343,8 +364,88 @@ class APIClient {
   // MARK: - Authorization Operations
 
   func checkAuthStatus(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall: [String: Any] = ["authorize": [String: Any]()]
+    // Send empty request — authorize block is auto-injected by makeAPICall
+    let apiCall: [String: Any] = [:]
     makeAPICall(apiCall, completion: completion)
+  }
+
+  /// Attempt login with username and raw password.
+  /// Stores hashed credentials on success for all subsequent API calls.
+  func login(
+    username: String, rawPassword: String,
+    completion: @escaping (Bool, String?) -> Void
+  ) {
+    authUsername = username
+    authPasswordHash = md5(rawPassword)
+
+    // Send auth check — makeAPICall auto-injects authorize with current credentials
+    makeAPICall([:]) { [weak self] (result: Result<[String: Any], APIError>) in
+      guard let self = self else { return }
+      switch result {
+      case .success(let data):
+        guard let authorize = data["authorize"] as? [String: Any],
+              let status = authorize["status"] as? String
+        else {
+          completion(false, "Unexpected response")
+          return
+        }
+        switch status {
+        case "OK":
+          completion(true, nil)
+        case "CHALL":
+          if let challenge = authorize["challenge"] as? String {
+            let oldChallenge = self.authChallenge
+            self.authChallenge = challenge
+            if challenge == oldChallenge {
+              // Same challenge = wrong credentials
+              completion(false, "Invalid username or password")
+            } else {
+              // New challenge, retry with updated hash
+              self.retryLogin(completion: completion)
+            }
+          } else {
+            completion(false, "Missing challenge")
+          }
+        default:
+          completion(false, "Unexpected status: \(status)")
+        }
+      case .failure(let error):
+        completion(false, error.localizedDescription)
+      }
+    }
+  }
+
+  private func retryLogin(completion: @escaping (Bool, String?) -> Void) {
+    makeAPICall([:]) { [weak self] (result: Result<[String: Any], APIError>) in
+      guard let self = self else { return }
+      switch result {
+      case .success(let data):
+        guard let authorize = data["authorize"] as? [String: Any],
+              let status = authorize["status"] as? String
+        else {
+          completion(false, "Unexpected response")
+          return
+        }
+        if status == "OK" {
+          completion(true, nil)
+        } else if status == "CHALL" {
+          if let challenge = authorize["challenge"] as? String {
+            self.authChallenge = challenge
+          }
+          completion(false, "Invalid username or password")
+        } else {
+          completion(false, "Unexpected status: \(status)")
+        }
+      case .failure(let error):
+        completion(false, error.localizedDescription)
+      }
+    }
+  }
+
+  func clearAuth() {
+    authUsername = ""
+    authPasswordHash = ""
+    authChallenge = ""
   }
 
   func createAccount(
@@ -357,6 +458,187 @@ class APIClient {
         "new_password": password,
       ]
     ]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  // MARK: - Protocol Management
+
+  func addProtocol(
+    _ config: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["addprotocol": config]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func deleteProtocol(
+    _ config: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["deleteprotocol": config]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func updateProtocol(
+    original: [String: Any], updated: [String: Any],
+    completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["updateprotocol": [original, updated]]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  // MARK: - Trigger Management
+
+  /// Save triggers by reading current config, replacing the triggers key, and sending full config.
+  func saveTriggers(
+    _ triggers: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    fetchConfiguration { [weak self] result in
+      switch result {
+      case .success(let data):
+        var config = data["config"] as? [String: Any] ?? [:]
+        config["triggers"] = triggers
+        let apiCall: [String: Any] = ["config": config]
+        self?.makeAPICall(apiCall, completion: completion)
+      case .failure(let error):
+        completion(.failure(error))
+      }
+    }
+  }
+
+  // MARK: - Variables
+
+  func listVariables(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
+    let apiCall: [String: Any] = ["variable_list": true]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func addVariable(
+    _ variable: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["variable_add": variable]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func removeVariable(
+    name: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["variable_remove": name]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  // MARK: - External Writers
+
+  func listExternalWriters(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
+    let apiCall: [String: Any] = ["external_writer_list": true]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func addExternalWriter(
+    _ config: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["external_writer_add": config]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func removeExternalWriter(
+    name: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["external_writer_remove": name]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  // MARK: - Push Extras
+
+  /// Add an automatic push rule with full fields (scheduling, conditions, notes, deactivation).
+  func addAutoPush(
+    _ config: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["push_auto_add": config]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  // MARK: - JWK Management
+
+  func addJWK(
+    _ entries: [[Any]], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["addjwks": entries]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func deleteJWK(
+    _ identifier: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["deletejwks": identifier]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  // MARK: - Stream Processes
+
+  func fetchProcessList(
+    streamName: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["proc_list": streamName]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  // MARK: - Stream Keys
+
+  func addStreamKeys(
+    _ keys: [String: String], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["streamkey_add": keys]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func deleteStreamKeys(
+    _ keys: [String], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["streamkey_del": keys]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  // MARK: - Camera / Device Discovery
+
+  func listCameras(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
+    let apiCall: [String: Any] = ["camera_list": true]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func updateCamera(
+    _ params: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["camera_update": params]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func removeCamera(
+    id: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["camera_remove": ["id": id]]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func queryCameraCommand(
+    id: String, command: String, args: [String: Any]? = nil,
+    completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    var query: [String: Any] = ["id": id, "command": command]
+    if let args = args { query["args"] = args }
+    let apiCall: [String: Any] = ["camera_query": query]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func createStreamFromCamera(
+    _ params: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["camera_create_stream": params]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func updateCameraConfig(
+    _ config: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = ["camera_config": config]
     makeAPICall(apiCall, completion: completion)
   }
 }

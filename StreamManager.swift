@@ -52,13 +52,22 @@ class StreamManager {
   }
 
   func updateStream(
-    name: String, config: [String: Any], completion: @escaping (Result<Void, Error>) -> Void
+    name: String, config: [String: Any], originalName: String? = nil,
+    stopSessions: Bool = false, completion: @escaping (Result<Void, Error>) -> Void
   ) {
     print("[StreamManager] Updating stream '\(name)'")
     // Use addstream API — adding a stream with an existing name updates it
-    APIClient.shared.createStream(name: name, source: config["source"] as? String) { result in
+    APIClient.shared.updateStream(name: name, config: config) { result in
       switch result {
       case .success:
+        // Handle rename: delete old stream
+        if let oldName = originalName, oldName != name {
+          APIClient.shared.deleteStream(oldName) { _ in }
+        }
+        // Handle stop sessions
+        if stopSessions {
+          APIClient.shared.kickAllViewers(streamName: originalName ?? name) { _ in }
+        }
         completion(.success(()))
       case .failure(let error):
         completion(.failure(error))

@@ -3,6 +3,7 @@
 //  MistTray
 //
 
+import Charts
 import SwiftUI
 
 // MARK: - Stream Detail View
@@ -12,14 +13,49 @@ struct StreamDetailView: View {
   let streamName: String
   @Binding var path: NavigationPath
 
+  private enum ConfirmAction: Equatable {
+    case delete, nuke, stopSessions, invalidateSessions
+    var message: String {
+      switch self {
+      case .delete: "Permanently delete '\(String())' and disconnect all viewers?"
+      case .nuke: "Immediately kill all connections and stop this stream?"
+      case .stopSessions: "Disconnect all current viewers from this stream?"
+      case .invalidateSessions: "Force all viewers to re-authenticate?"
+      }
+    }
+    var buttonLabel: String {
+      switch self {
+      case .delete: "Delete"
+      case .nuke: "Nuke"
+      case .stopSessions: "Stop Sessions"
+      case .invalidateSessions: "Invalidate"
+      }
+    }
+  }
+
   @State private var tags: [String] = []
   @State private var isLoadingTags = false
-  @State private var showDeleteConfirm = false
-  @State private var showNukeConfirm = false
+  @State private var confirmAction: ConfirmAction?
+  @State private var streamInfo: [String: Any] = [:]
+  @State private var infoTimer: Timer?
+  @State private var processes: [[String: Any]] = []
 
   private var isOnline: Bool { appState.isStreamOnline(streamName) }
   private var source: String { appState.streamSource(streamName) }
   private var viewers: Int { appState.streamViewerCount(streamName) }
+
+  private var httpPort: Int {
+    for proto in appState.configuredProtocols {
+      if let c = proto["connector"] as? String,
+         c.uppercased().contains("HTTP"),
+         !c.uppercased().contains("HTTPS"),
+         let port = proto["port"] as? Int
+      {
+        return port
+      }
+    }
+    return 8080
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -29,10 +65,11 @@ struct StreamDetailView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
           HStack {
+            let status = appState.streamStatusLabel(streamName)
             Circle()
-              .fill(isOnline ? Color.green : Color.gray.opacity(0.4))
+              .fill(statusColor(status.color))
               .frame(width: 10, height: 10)
-            Text(isOnline ? "Online" : "Offline")
+            Text(status.text)
               .font(.subheadline)
               .foregroundStyle(isOnline ? .primary : .secondary)
             Spacer()
@@ -63,7 +100,7 @@ struct StreamDetailView: View {
                   path.append(Route.addStreamTag(streamName))
                 } label: {
                   Image(systemName: "plus.circle")
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.tnAccent)
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
                 }
@@ -91,21 +128,115 @@ struct StreamDetailView: View {
           }
 
           if isOnline {
-            let bw = appState.streamBandwidth(streamName)
-            if bw > 0 {
-              GroupBox("Bandwidth") {
+            GroupBox("Metrics") {
+              VStack(alignment: .leading, spacing: 8) {
+                let history = appState.streamHistory[streamName] ?? []
+                if history.count >= 2 {
+                  SparklineChart(
+                    data: history.map { ($0.timestamp, Double($0.viewers)) },
+                    color: .tnAccent,
+                    label: "Viewers",
+                    currentValue: "\(viewers)"
+                  )
+                }
+
+                let bwOut = appState.streamBandwidth(streamName)
+                let bwIn = appState.streamBandwidthIn(streamName)
                 HStack {
-                  Text(DataProcessor.shared.formatBandwidth(bw))
-                    .font(.system(.body, design: .rounded))
+                  Text("BW Out")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                   Spacer()
+                  Text(DataProcessor.shared.formatBandwidth(bwOut))
+                    .font(.system(.body, design: .rounded, weight: .semibold))
+                }
+                if bwIn > 0 {
+                  HStack {
+                    Text("BW In")
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(DataProcessor.shared.formatBandwidth(bwIn))
+                      .font(.system(.body, design: .rounded, weight: .semibold))
+                  }
                 }
               }
             }
           }
 
+          if isOnline && !trackSummaries.isEmpty {
+            GroupBox("Tracks") {
+              VStack(alignment: .leading, spacing: 4) {
+                ForEach(trackSummaries, id: \.self) { summary in
+                  HStack(spacing: 6) {
+                    Image(systemName: summary.hasPrefix("Video") ? "film" : summary.hasPrefix("Audio") ? "speaker.wave.2" : "doc.text")
+                      .font(.system(size: 10))
+                      .foregroundStyle(.secondary)
+                      .frame(width: 14)
+                    Text(summary)
+                      .font(.system(size: 11, design: .monospaced))
+                  }
+                }
+              }
+            }
+          }
+
+          if isOnline && !processes.isEmpty {
+            GroupBox("Processes") {
+              VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(processes.enumerated()), id: \.offset) { _, proc in
+                  processRow(proc)
+                }
+              }
+            }
+          }
+
+          if isOnline {
+            GroupBox("Playback") {
+              Button {
+                path.append(Route.embedURLs(streamName))
+              } label: {
+                HStack {
+                  Label("Embed & URLs", systemImage: "link")
+                    .font(.subheadline)
+                  Spacer()
+                  Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .pointerOnHover()
+            }
+          }
+
           Divider()
 
-          HStack(spacing: 12) {
+          // Inline confirmation banner
+          if let action = confirmAction {
+            GroupBox {
+              VStack(spacing: 8) {
+                HStack(spacing: 6) {
+                  Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.tnOrange)
+                    .font(.caption)
+                  Text(confirmMessage(action))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                HStack {
+                  Button("Cancel") { confirmAction = nil }
+                    .buttonStyle(.bordered).controlSize(.small).pointerOnHover()
+                  Spacer()
+                  Button(action.buttonLabel, role: .destructive) { executeConfirmAction(action) }
+                    .buttonStyle(.borderedProminent).controlSize(.small).pointerOnHover()
+                }
+              }
+            }
+          }
+
+          HStack(spacing: 8) {
             Button {
               path.append(Route.editStream(streamName))
             } label: {
@@ -117,21 +248,29 @@ struct StreamDetailView: View {
             .pointerOnHover()
 
             if isOnline {
-              Button(role: .destructive) {
-                showNukeConfirm = true
+              Menu {
+                Button { confirmAction = .stopSessions } label: {
+                  Label("Stop Sessions", systemImage: "stop.circle")
+                }
+                Button { confirmAction = .invalidateSessions } label: {
+                  Label("Invalidate Sessions", systemImage: "arrow.counterclockwise")
+                }
+                Divider()
+                Button(role: .destructive) { confirmAction = .nuke } label: {
+                  Label("Nuke Stream", systemImage: "flame")
+                }
               } label: {
-                Label("Nuke", systemImage: "flame")
+                Label("Actions", systemImage: "ellipsis.circle")
                   .contentShape(Rectangle())
               }
-              .buttonStyle(.bordered)
-              .controlSize(.small)
-              .pointerOnHover()
+              .menuStyle(.borderlessButton)
+              .fixedSize()
             }
 
             Spacer()
 
             Button(role: .destructive) {
-              showDeleteConfirm = true
+              confirmAction = .delete
             } label: {
               Label("Delete", systemImage: "trash")
                 .contentShape(Rectangle())
@@ -146,18 +285,13 @@ struct StreamDetailView: View {
     }
     .navigationBarBackButtonHidden(true)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .onAppear { loadTags() }
-    .confirmationDialog("Delete Stream", isPresented: $showDeleteConfirm) {
-      Button("Delete", role: .destructive) { deleteStream() }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("This will permanently delete '\(streamName)'. Active viewers will be disconnected.")
+    .onAppear {
+      loadTags()
+      if isOnline { startInfoPolling() }
     }
-    .confirmationDialog("Nuke Stream", isPresented: $showNukeConfirm) {
-      Button("Nuke", role: .destructive) { nukeStream() }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("This will immediately disconnect all viewers and stop the stream.")
+    .onDisappear { stopInfoPolling() }
+    .onChange(of: isOnline) { _, online in
+      if online { startInfoPolling() } else { stopInfoPolling() }
     }
   }
 
@@ -187,6 +321,7 @@ struct StreamDetailView: View {
     StreamManager.shared.deleteStream(name: streamName) { result in
       DispatchQueue.main.async {
         if case .success = result {
+          appState.onDataChanged?()
           path.removeLast()
         }
       }
@@ -197,10 +332,201 @@ struct StreamDetailView: View {
     StreamManager.shared.nukeStream(name: streamName) { result in
       DispatchQueue.main.async {
         if case .success = result {
+          appState.onDataChanged?()
           path.removeLast()
         }
       }
     }
+  }
+
+  private func confirmMessage(_ action: ConfirmAction) -> String {
+    switch action {
+    case .delete: "Permanently delete '\(streamName)' and disconnect all viewers?"
+    case .nuke: "Immediately kill all connections and stop this stream?"
+    case .stopSessions: "Disconnect all current viewers from this stream?"
+    case .invalidateSessions: "Force all viewers to re-authenticate?"
+    }
+  }
+
+  private func executeConfirmAction(_ action: ConfirmAction) {
+    confirmAction = nil
+    switch action {
+    case .delete:
+      deleteStream()
+    case .nuke:
+      nukeStream()
+    case .stopSessions:
+      APIClient.shared.kickAllViewers(streamName: streamName) { result in
+        DispatchQueue.main.async {
+          if case .success = result { appState.onDataChanged?() }
+        }
+      }
+    case .invalidateSessions:
+      APIClient.shared.forceReauthentication(streamName: streamName) { result in
+        DispatchQueue.main.async {
+          if case .success = result { appState.onDataChanged?() }
+        }
+      }
+    }
+  }
+
+  private func statusColor(_ name: String) -> Color {
+    switch name {
+    case "green": return .tnGreen
+    case "yellow": return .tnYellow
+    case "orange": return .tnOrange
+    case "red": return .tnRed
+    default: return .gray.opacity(0.4)
+    }
+  }
+
+  // MARK: - Info JSON Polling
+
+  private func startInfoPolling() {
+    let encoded = streamName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? streamName
+    let urlString = "http://localhost:\(httpPort)/json_\(encoded).js"
+    fetchInfoJSON(urlString)
+    infoTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+      fetchInfoJSON(urlString)
+    }
+  }
+
+  private func stopInfoPolling() {
+    infoTimer?.invalidate()
+    infoTimer = nil
+  }
+
+  private func fetchInfoJSON(_ urlString: String) {
+    guard let url = URL(string: urlString) else { return }
+    URLSession.shared.dataTask(with: url) { data, _, _ in
+      guard let data = data,
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      else { return }
+      DispatchQueue.main.async { self.streamInfo = json }
+    }.resume()
+
+    // Also fetch process list
+    fetchProcesses()
+  }
+
+  private func fetchProcesses() {
+    APIClient.shared.fetchProcessList(streamName: streamName) { result in
+      DispatchQueue.main.async {
+        if case .success(let data) = result,
+           let procList = data["proc_list"] {
+          if let dict = procList as? [String: Any] {
+            self.processes = dict.values.compactMap { $0 as? [String: Any] }
+          } else if let arr = procList as? [[String: Any]] {
+            self.processes = arr
+          } else {
+            self.processes = []
+          }
+        } else {
+          self.processes = []
+        }
+      }
+    }
+  }
+
+  private func processRow(_ proc: [String: Any]) -> some View {
+    let name = proc["process"] as? String ?? "Unknown"
+    let source = proc["source"] as? String
+    let sink = proc["sink"] as? String
+    let pid = proc["pid"]
+    let activeSeconds = proc["active_seconds"] as? Int
+
+    return VStack(alignment: .leading, spacing: 4) {
+      HStack {
+        Text(name)
+          .font(.system(.body, weight: .medium))
+        Spacer()
+        if let pid = pid {
+          Text("PID \(pid)")
+            .font(.system(size: 9, design: .monospaced))
+            .foregroundStyle(.tertiary)
+        }
+      }
+
+      if let source = source, !source.isEmpty {
+        HStack(spacing: 4) {
+          Text("Source:")
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+          Text(source)
+            .font(.system(size: 10, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+      }
+
+      if let sink = sink, !sink.isEmpty {
+        HStack(spacing: 4) {
+          Text("Sink:")
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+          Text(sink)
+            .font(.system(size: 10, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+      }
+
+      if let seconds = activeSeconds, seconds > 0 {
+        Text("Active: \(DataProcessor.shared.formatDuration(seconds))")
+          .font(.system(size: 10))
+          .foregroundStyle(.secondary)
+      }
+
+      // Show logs if any
+      if let logs = proc["logs"] as? [[Any]], !logs.isEmpty {
+        VStack(alignment: .leading, spacing: 1) {
+          ForEach(logs.suffix(3).indices, id: \.self) { i in
+            let entry = logs[i]
+            let msg = entry.count > 2 ? String(describing: entry[2]) : ""
+            if !msg.isEmpty {
+              Text(msg)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            }
+          }
+        }
+      }
+    }
+    .padding(.vertical, 4)
+  }
+
+  private var trackSummaries: [String] {
+    guard let meta = streamInfo["meta"] as? [String: Any],
+          let tracks = meta["tracks"] as? [String: Any]
+    else { return [] }
+
+    var summaries: [String] = []
+    for (_, value) in tracks.sorted(by: { $0.key < $1.key }) {
+      guard let track = value as? [String: Any],
+            let type = track["type"] as? String,
+            let codec = track["codec"] as? String
+      else { continue }
+
+      switch type.lowercased() {
+      case "video":
+        let w = track["width"] as? Int ?? 0
+        let h = track["height"] as? Int ?? 0
+        let fps = track["fpks"] as? Int ?? (track["fps"] as? Int ?? 0)
+        let fpsStr = fps > 0 ? " \(fps > 100 ? fps / 1000 : fps)fps" : ""
+        let res = w > 0 && h > 0 ? " \(w)x\(h)" : ""
+        summaries.append("Video: \(codec)\(res)\(fpsStr)")
+      case "audio":
+        let rate = track["rate"] as? Int ?? 0
+        let channels = track["channels"] as? Int ?? 0
+        let rateStr = rate > 0 ? " \(rate / 1000)kHz" : ""
+        let chStr = channels == 1 ? " mono" : channels == 2 ? " stereo" : channels > 0 ? " \(channels)ch" : ""
+        summaries.append("Audio: \(codec)\(rateStr)\(chStr)")
+      default:
+        summaries.append("\(type.capitalized): \(codec)")
+      }
+    }
+    return summaries
   }
 }
 
@@ -227,7 +553,7 @@ struct TagChip: View {
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 4)
-    .background(.blue.opacity(0.1))
+    .background(Color.tnAccent.opacity(0.1))
     .clipShape(Capsule())
   }
 }
@@ -276,6 +602,82 @@ struct FlowLayout: Layout {
 
 // MARK: - Statistics View
 
+// MARK: - Sparkline Chart Component
+
+struct SparklineChart: View {
+  let data: [(Date, Double)]
+  let color: Color
+  let label: String
+  let currentValue: String
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Text(label)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(width: 52, alignment: .leading)
+
+      if data.count >= 2 {
+        Chart {
+          ForEach(Array(data.enumerated()), id: \.offset) { _, point in
+            LineMark(x: .value("T", point.0), y: .value("V", point.1))
+              .interpolationMethod(.catmullRom)
+            AreaMark(x: .value("T", point.0), y: .value("V", point.1))
+              .interpolationMethod(.catmullRom)
+              .foregroundStyle(
+                .linearGradient(
+                  colors: [color.opacity(0.3), color.opacity(0.05)],
+                  startPoint: .top, endPoint: .bottom))
+          }
+        }
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .chartLegend(.hidden)
+        .foregroundStyle(color)
+        .frame(height: 36)
+      } else {
+        Text("Collecting...")
+          .font(.system(size: 9))
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: .infinity)
+          .frame(height: 36)
+      }
+
+      Text(currentValue)
+        .font(.system(.caption, design: .rounded, weight: .semibold))
+        .frame(width: 70, alignment: .trailing)
+    }
+  }
+}
+
+// MARK: - Stat Card Component
+
+struct StatCard: View {
+  let value: String
+  let label: String
+  let icon: String
+  let color: Color
+
+  var body: some View {
+    VStack(spacing: 4) {
+      Image(systemName: icon)
+        .font(.caption)
+        .foregroundStyle(color)
+      Text(value)
+        .font(.system(.title3, design: .rounded, weight: .bold))
+      Text(label)
+        .font(.system(size: 9))
+        .foregroundStyle(.secondary)
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.vertical, 8)
+    .background(color.opacity(0.06))
+    .clipShape(RoundedRectangle(cornerRadius: 8))
+  }
+}
+
+// MARK: - Statistics View
+
 struct StatisticsView: View {
   @Bindable var appState: AppState
 
@@ -285,109 +687,38 @@ struct StatisticsView: View {
       Divider()
 
       ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          // Server overview
+        VStack(alignment: .leading, spacing: 12) {
+          // Server Health (CPU + Memory bars)
+          if appState.serverRunning && !appState.serverCapabilities.isEmpty {
+            serverHealthSection
+          }
+
+          // Traffic sparklines
           if appState.serverRunning {
-            GroupBox("Server") {
-              VStack(alignment: .leading, spacing: 8) {
-                statRow(label: "Uptime", value: appState.formattedUptime)
-                statRow(label: "Bandwidth Out", value: appState.formattedTotalBandwidth)
-                if appState.totalBandwidthIn > 0 {
-                  statRow(
-                    label: "Bandwidth In",
-                    value: DataProcessor.shared.formatBandwidth(appState.totalBandwidthIn))
-                }
-              }
-            }
+            trafficSection
           }
 
-          // Current counts
-          GroupBox("Current") {
-            VStack(alignment: .leading, spacing: 8) {
-              statRow(label: "Active Streams", value: "\(appState.activeStreamCount)")
-              statRow(label: "Connected Viewers", value: "\(appState.viewerCount)")
-              statRow(label: "Active Pushes", value: "\(appState.pushCount)")
-            }
+          // Stat cards
+          countsSection
+
+          // Protocol distribution
+          if !appState.clientProtocolCounts.isEmpty {
+            protocolDistributionSection
           }
 
-          // System info from capabilities
-          if !appState.serverCapabilities.isEmpty {
-            let sysInfo = UtilityManager.shared.formatSystemStats(appState.serverCapabilities)
-            if !sysInfo.isEmpty {
-              GroupBox("System") {
-                VStack(alignment: .leading, spacing: 8) {
-                  ForEach(sysInfo.components(separatedBy: " | "), id: \.self) { part in
-                    let pieces = part.split(separator: ":", maxSplits: 1)
-                    if pieces.count == 2 {
-                      statRow(
-                        label: String(pieces[0]).trimmingCharacters(in: .whitespaces),
-                        value: String(pieces[1]).trimmingCharacters(in: .whitespaces))
-                    } else {
-                      Text(part)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                  }
-                }
-              }
-            }
+          // Connections breakdown
+          if appState.serverRunning {
+            connectionsSection
           }
 
-          // Per-stream breakdown
+          // Active streams sorted by viewers
           if !appState.activeStreams.isEmpty {
-            GroupBox("Active Streams") {
-              VStack(alignment: .leading, spacing: 8) {
-                ForEach(appState.activeStreams, id: \.self) { name in
-                  HStack {
-                    Circle()
-                      .fill(Color.green)
-                      .frame(width: 6, height: 6)
-                    Text(name)
-                      .font(.system(.body, weight: .medium))
-                    Spacer()
-                    let viewers = appState.streamViewerCount(name)
-                    if viewers > 0 {
-                      Label("\(viewers)", systemImage: "person.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                    let bw = appState.streamBandwidth(name)
-                    if bw > 0 {
-                      Text(DataProcessor.shared.formatBandwidth(bw))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                  }
-                }
-              }
-            }
+            activeStreamsSection
           }
 
-          // Protocols
-          if !appState.lastProtocolData.isEmpty {
-            GroupBox("Protocols") {
-              VStack(alignment: .leading, spacing: 8) {
-                ForEach(appState.lastProtocolData.keys.sorted(), id: \.self) { name in
-                  if let data = appState.lastProtocolData[name] as? [String: Any] {
-                    HStack {
-                      Circle()
-                        .fill(
-                          (data["online"] as? Int) == 1 ? Color.green : Color.gray.opacity(0.4)
-                        )
-                        .frame(width: 8, height: 8)
-                      Text(name.uppercased())
-                        .font(.system(.body, weight: .medium))
-                      Spacer()
-                      if let port = data["port"] as? Int {
-                        Text(":\(port)")
-                          .font(.caption)
-                          .foregroundStyle(.secondary)
-                      }
-                    }
-                  }
-                }
-              }
-            }
+          // System info
+          if appState.serverRunning {
+            systemSection
           }
         }
         .padding(16)
@@ -397,6 +728,228 @@ struct StatisticsView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
+  // MARK: - Server Health
+
+  private var serverHealthSection: some View {
+    GroupBox("Server Health") {
+      VStack(spacing: 8) {
+        HStack {
+          Text("CPU")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(width: 32, alignment: .leading)
+          ProgressView(value: min(appState.cpuUsagePercent, 100), total: 100)
+            .tint(colorForPercent(appState.cpuUsagePercent))
+          Text(DataProcessor.shared.formatPercentage(appState.cpuUsagePercent))
+            .font(.system(.caption, design: .rounded, weight: .semibold))
+            .frame(width: 48, alignment: .trailing)
+        }
+        HStack {
+          Text("RAM")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(width: 32, alignment: .leading)
+          ProgressView(value: min(appState.memoryPercent, 100), total: 100)
+            .tint(colorForPercent(appState.memoryPercent))
+          Text(DataProcessor.shared.formatPercentage(appState.memoryPercent))
+            .font(.system(.caption, design: .rounded, weight: .semibold))
+            .frame(width: 48, alignment: .trailing)
+        }
+        if appState.memoryTotalMB > 0 {
+          Text(
+            "\(DataProcessor.shared.formatBytes(appState.memoryUsedMB * 1_048_576)) / \(DataProcessor.shared.formatBytes(appState.memoryTotalMB * 1_048_576))"
+          )
+          .font(.system(size: 10))
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+      }
+    }
+  }
+
+  // MARK: - Traffic Sparklines
+
+  private var trafficSection: some View {
+    GroupBox("Traffic") {
+      VStack(spacing: 6) {
+        SparklineChart(
+          data: appState.totalsHistory.map { ($0.timestamp, Double($0.clients)) },
+          color: .tnAccent,
+          label: "Viewers",
+          currentValue: "\(appState.viewerCount)"
+        )
+        SparklineChart(
+          data: appState.totalsHistory.map { ($0.timestamp, Double($0.bpsOut)) },
+          color: .tnGreen,
+          label: "BW Out",
+          currentValue: appState.formattedTotalBandwidth
+        )
+        SparklineChart(
+          data: appState.totalsHistory.map { ($0.timestamp, Double($0.bpsIn)) },
+          color: .tnOrange,
+          label: "BW In",
+          currentValue: DataProcessor.shared.formatBandwidth(appState.totalBandwidthIn)
+        )
+      }
+    }
+  }
+
+  // MARK: - Stat Cards
+
+  private var countsSection: some View {
+    HStack(spacing: 8) {
+      StatCard(
+        value: "\(appState.activeStreamCount)", label: "Streams", icon: "tv", color: .tnAccent)
+      StatCard(
+        value: "\(appState.viewerCount)", label: "Viewers", icon: "person.2.fill", color: .tnGreen)
+      StatCard(
+        value: "\(appState.pushCount)", label: "Pushes", icon: "arrow.up.circle", color: .tnPurple)
+    }
+  }
+
+  // MARK: - Protocol Distribution
+
+  private var protocolDistributionSection: some View {
+    let viewerProtocols = appState.clientProtocolCounts
+      .filter { !$0.key.hasPrefix("INPUT:") }
+      .sorted { $0.value > $1.value }
+
+    return GroupBox("Viewers by Protocol") {
+      VStack(spacing: 6) {
+        ForEach(viewerProtocols, id: \.key) { proto, count in
+          HStack {
+            Text(proto)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .frame(width: 60, alignment: .leading)
+            ProgressView(
+              value: Double(count),
+              total: Double(max(appState.viewerCount, 1))
+            )
+            .tint(.tnAccent)
+            Text("\(count)")
+              .font(.system(.caption, design: .rounded, weight: .semibold))
+              .frame(width: 30, alignment: .trailing)
+          }
+        }
+
+        // Show INPUT protocols separately
+        let inputProtocols = appState.clientProtocolCounts
+          .filter { $0.key.hasPrefix("INPUT:") }
+          .sorted { $0.value > $1.value }
+        if !inputProtocols.isEmpty {
+          Divider()
+          ForEach(inputProtocols, id: \.key) { proto, count in
+            HStack {
+              Text(proto.replacingOccurrences(of: "INPUT:", with: ""))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 60, alignment: .leading)
+              Text("input")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+              Spacer()
+              Text("\(count)")
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .frame(width: 30, alignment: .trailing)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // MARK: - Connections Breakdown
+
+  private var connectionsSection: some View {
+    GroupBox("Connections") {
+      VStack(spacing: 4) {
+        HStack {
+          Text("Total (from server)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Text("\(appState.totalConnectionCount)")
+            .font(.system(.caption, design: .rounded, weight: .semibold))
+        }
+        HStack {
+          Text("Viewers (output)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Text("\(appState.viewerCount)")
+            .font(.system(.caption, design: .rounded, weight: .semibold))
+            .foregroundStyle(Color.tnGreen)
+        }
+        HStack {
+          Text("Inputs")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Text("\(appState.inputConnectionCount)")
+            .font(.system(.caption, design: .rounded, weight: .semibold))
+            .foregroundStyle(Color.tnOrange)
+        }
+      }
+    }
+  }
+
+  // MARK: - Active Streams
+
+  private var activeStreamsSection: some View {
+    GroupBox("Active Streams") {
+      VStack(alignment: .leading, spacing: 6) {
+        ForEach(
+          appState.activeStreams.sorted {
+            appState.streamViewerCount($0) > appState.streamViewerCount($1)
+          }, id: \.self
+        ) { name in
+          HStack {
+            Circle().fill(Color.tnGreen).frame(width: 6, height: 6)
+            Text(name)
+              .font(.system(.body, weight: .medium))
+              .lineLimit(1)
+            Spacer()
+            let viewers = appState.streamViewerCount(name)
+            if viewers > 0 {
+              Label("\(viewers)", systemImage: "person.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            let bw = appState.streamBandwidth(name)
+            if bw > 0 {
+              Text(DataProcessor.shared.formatBandwidth(bw))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // MARK: - System Info
+
+  private var systemSection: some View {
+    GroupBox("System") {
+      VStack(alignment: .leading, spacing: 8) {
+        statRow(label: "Uptime", value: appState.formattedUptime)
+        statRow(
+          label: "Bandwidth",
+          value:
+            "\(appState.formattedTotalBandwidth) out / \(DataProcessor.shared.formatBandwidth(appState.totalBandwidthIn)) in"
+        )
+        if let load = appState.loadAverages {
+          statRow(
+            label: "Load Avg",
+            value: String(format: "%.2f  %.2f  %.2f", load.one, load.five, load.fifteen))
+        }
+      }
+    }
+  }
+
+  // MARK: - Helpers
+
   private func statRow(label: String, value: String) -> some View {
     HStack {
       Text(label)
@@ -405,6 +958,12 @@ struct StatisticsView: View {
       Text(value)
         .font(.system(.body, design: .rounded, weight: .semibold))
     }
+  }
+
+  private func colorForPercent(_ pct: Double) -> Color {
+    if pct > 90 { return .tnRed }
+    if pct > 70 { return .tnOrange }
+    return .tnGreen
   }
 }
 
@@ -425,6 +984,21 @@ struct ClientsView: View {
               .font(.subheadline)
               .foregroundStyle(.secondary)
             Spacer()
+          }
+
+          if !appState.clientProtocolCounts.isEmpty {
+            HStack(spacing: 6) {
+              ForEach(
+                appState.clientProtocolCounts.sorted(by: { $0.value > $1.value }), id: \.key
+              ) { proto, count in
+                Text("\(proto): \(count)")
+                  .font(.system(size: 10, weight: .medium))
+                  .padding(.horizontal, 8)
+                  .padding(.vertical, 3)
+                  .background(Color.tnAccent.opacity(0.1))
+                  .clipShape(Capsule())
+              }
+            }
           }
 
           if appState.connectedClients.isEmpty {
@@ -460,10 +1034,14 @@ struct ClientsView: View {
           Spacer()
           Menu {
             Button("Kick All Viewers") {
-              ClientManager.shared.kickAllViewers(streamName: streamName) { _ in }
+              ClientManager.shared.kickAllViewers(streamName: streamName) { _ in
+                DispatchQueue.main.async { appState.onDataChanged?() }
+              }
             }
             Button("Force Re-auth") {
-              ClientManager.shared.forceReauthentication(streamName: streamName) { _ in }
+              ClientManager.shared.forceReauthentication(streamName: streamName) { _ in
+                DispatchQueue.main.async { appState.onDataChanged?() }
+              }
             }
           } label: {
             Image(systemName: "ellipsis.circle")
@@ -494,7 +1072,7 @@ struct ClientsView: View {
             .font(.caption)
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
-            .background(.blue.opacity(0.1))
+            .background(Color.tnAccent.opacity(0.1))
             .clipShape(Capsule())
           if let conntime = info["conntime"] as? Int {
             let elapsed = Int(Date().timeIntervalSince1970) - conntime
@@ -502,16 +1080,23 @@ struct ClientsView: View {
               .font(.caption)
               .foregroundStyle(.secondary)
           }
+          if let downbps = info["downbps"] as? Int, downbps > 0 {
+            Text(DataProcessor.shared.formatBandwidth(downbps))
+              .font(.system(size: 10, design: .rounded))
+              .foregroundStyle(Color.tnAccent)
+          }
         }
       }
       Spacer()
       if let sessId = info["sessId"] as? String {
         Button {
-          ClientManager.shared.disconnectClient(sessionId: sessId) { _ in }
+          ClientManager.shared.disconnectClient(sessionId: sessId) { _ in
+                  DispatchQueue.main.async { appState.onDataChanged?() }
+                }
         } label: {
           Image(systemName: "xmark.circle")
             .font(.caption)
-            .foregroundStyle(.red.opacity(0.7))
+            .foregroundStyle(Color.tnRed.opacity(0.7))
             .frame(width: 24, height: 24)
             .contentShape(Rectangle())
         }
@@ -630,9 +1215,9 @@ struct LogsView: View {
 
   private func logCategoryColor(_ category: String) -> Color {
     let lower = category.lowercased()
-    if lower.contains("error") || lower.contains("fail") { return .red }
-    if lower.contains("warn") { return .orange }
-    if lower.contains("info") { return .blue }
+    if lower.contains("error") || lower.contains("fail") { return .tnRed }
+    if lower.contains("warn") { return .tnOrange }
+    if lower.contains("info") { return .tnAccent }
     return .secondary
   }
 }
@@ -642,9 +1227,6 @@ struct LogsView: View {
 struct AutoPushRulesView: View {
   @Bindable var appState: AppState
   @Binding var path: NavigationPath
-
-  @State private var rules: [String: Any] = [:]
-  @State private var isLoading = true
 
   var body: some View {
     VStack(spacing: 0) {
@@ -659,7 +1241,7 @@ struct AutoPushRulesView: View {
               .foregroundStyle(.secondary)
             Spacer()
             Button {
-              path.append(Route.addAutoPushRule)
+              path.append(Route.pushWizard)
             } label: {
               Label("Add Rule", systemImage: "plus.circle.fill")
                 .font(.subheadline)
@@ -669,18 +1251,15 @@ struct AutoPushRulesView: View {
             .pointerOnHover()
           }
 
-          if isLoading {
-            ProgressView()
-              .frame(maxWidth: .infinity)
-          } else if rules.isEmpty {
+          if appState.autoPushRules.isEmpty {
             Text("No auto-push rules configured")
               .font(.subheadline)
               .foregroundStyle(.secondary)
               .frame(maxWidth: .infinity, alignment: .center)
               .padding(.vertical, 20)
           } else {
-            ForEach(Array(rules.keys.sorted()), id: \.self) { ruleId in
-              if let rule = rules[ruleId] as? [String: Any] {
+            ForEach(Array(appState.autoPushRules.keys.sorted()), id: \.self) { ruleId in
+              if let rule = appState.autoPushRules[ruleId] as? [String: Any] {
                 ruleRow(ruleId: ruleId, rule: rule)
               }
             }
@@ -691,7 +1270,6 @@ struct AutoPushRulesView: View {
     }
     .navigationBarBackButtonHidden(true)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .onAppear { loadRules() }
   }
 
   private func ruleRow(ruleId: String, rule: [String: Any]) -> some View {
@@ -720,23 +1298,11 @@ struct AutoPushRulesView: View {
     .padding(.vertical, 4)
   }
 
-  private func loadRules() {
-    isLoading = true
-    PushManager.shared.listAutoPushRules { result in
-      DispatchQueue.main.async {
-        isLoading = false
-        if case .success(let fetchedRules) = result {
-          rules = fetchedRules
-        }
-      }
-    }
-  }
-
   private func deleteRule(ruleId: String) {
-    PushManager.shared.deleteAutoPushRule(ruleId: ruleId) { result in
+    APIClient.shared.deleteAutoPushRule(ruleId: ruleId) { result in
       DispatchQueue.main.async {
         if case .success = result {
-          rules.removeValue(forKey: ruleId)
+          appState.onDataChanged?()
         }
       }
     }
@@ -748,7 +1314,6 @@ struct AutoPushRulesView: View {
 struct SettingsView: View {
   @Bindable var appState: AppState
 
-  @State private var autoUpdate: Bool = false
   @State private var startOnLaunch: Bool = false
   @State private var showNotifications: Bool = false
   @State private var customBinaryPath: String = ""
@@ -761,9 +1326,82 @@ struct SettingsView: View {
       Divider()
 
       Form {
+        Section("Updates") {
+          HStack {
+            Text("MistServer:")
+              .foregroundStyle(.secondary)
+            Text(appState.mistServerBaseVersion ?? "Unknown")
+            if appState.mistServerUpdateAvailable,
+              let latest = appState.mistServerLatestVersion
+            {
+              Image(systemName: "arrow.right")
+                .font(.system(size: 9))
+                .foregroundStyle(Color.tnAccent)
+              Text(latest)
+                .foregroundStyle(Color.tnAccent)
+            }
+          }
+          .font(.caption)
+
+          HStack {
+            Text("MistTray:")
+              .foregroundStyle(.secondary)
+            Text(appState.mistTrayCurrentVersion)
+            if appState.mistTrayUpdateAvailable,
+              let latest = appState.mistTrayLatestVersion
+            {
+              Image(systemName: "arrow.right")
+                .font(.system(size: 9))
+                .foregroundStyle(Color.tnGreen)
+              Text(latest)
+                .foregroundStyle(Color.tnGreen)
+            }
+          }
+          .font(.caption)
+
+          HStack {
+            Button {
+              if let appDelegate = NSApp.delegate as? AppDelegate {
+                appDelegate.checkForAllUpdates()
+              }
+            } label: {
+              HStack(spacing: 4) {
+                if appState.isCheckingForUpdates {
+                  ProgressView()
+                    .controlSize(.mini)
+                } else {
+                  Image(systemName: "arrow.clockwise")
+                }
+                Text("Check Now")
+              }
+            }
+            .disabled(appState.isCheckingForUpdates)
+
+            Spacer()
+
+            if let lastCheck = appState.lastUpdateCheck {
+              Text(lastCheck, style: .relative)
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+            }
+          }
+        }
+
+        Section("Connection") {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Server URL")
+              .font(.caption.weight(.medium))
+              .foregroundStyle(.secondary)
+            TextField("http://localhost:4242", text: Binding(
+              get: { appState.serverURL },
+              set: { appState.serverURL = $0; hasChanges = true }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .font(.caption)
+          }
+        }
+
         Section("Server") {
-          Toggle("Auto-update MistServer", isOn: $autoUpdate)
-            .onChange(of: autoUpdate) { hasChanges = true }
           Toggle("Start server on app launch", isOn: $startOnLaunch)
             .onChange(of: startOnLaunch) { hasChanges = true }
           Toggle("Show notifications", isOn: $showNotifications)
@@ -850,7 +1488,11 @@ struct SettingsView: View {
                     appState.serverRunning = success
                     if success {
                       DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                        (NSApp.delegate as? AppDelegate)?.checkAuthAndRefresh()
+                        if let appDelegate = NSApp.delegate as? AppDelegate {
+                          appDelegate.enableDefaultProtocols {
+                            appDelegate.checkAuthAndRefresh()
+                          }
+                        }
                       }
                     }
                   }
@@ -875,7 +1517,6 @@ struct SettingsView: View {
     .navigationBarBackButtonHidden(true)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .onAppear {
-      autoUpdate = UserDefaults.standard.bool(forKey: "AutoUpdateEnabled")
       startOnLaunch = UserDefaults.standard.bool(forKey: "LaunchAtStartup")
       showNotifications = UserDefaults.standard.bool(forKey: "ShowNotifications")
       customBinaryPath = UserDefaults.standard.string(forKey: "CustomBinaryPath") ?? ""
@@ -885,7 +1526,6 @@ struct SettingsView: View {
   }
 
   private func savePreferences() {
-    UserDefaults.standard.set(autoUpdate, forKey: "AutoUpdateEnabled")
     UserDefaults.standard.set(startOnLaunch, forKey: "LaunchAtStartup")
     UserDefaults.standard.set(showNotifications, forKey: "ShowNotifications")
     UserDefaults.standard.set(customBinaryPath.trimmed, forKey: "CustomBinaryPath")

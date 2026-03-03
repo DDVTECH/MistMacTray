@@ -239,9 +239,10 @@ class DataProcessor {
 
   // MARK: - Data Formatting Utilities
 
-  func formatBandwidth(_ bps: Int) -> String {
+  func formatBandwidth(_ bytesPerSec: Int) -> String {
+    let bits = Double(bytesPerSec) * 8
     let units = ["bps", "Kbps", "Mbps", "Gbps"]
-    var value = Double(bps)
+    var value = bits
     var unitIndex = 0
 
     while value >= 1000 && unitIndex < units.count - 1 {
@@ -373,55 +374,40 @@ class DataProcessor {
   // MARK: - Raw Data Processing (from AppDelegate)
 
   func processAllStreams(_ streamsData: Any?) -> [String: Any] {
-    print(
-      "processAllStreams - Input type: \(type(of: streamsData)), value: \(streamsData ?? "nil")")
-
     // Handle null values gracefully (normal for fresh server)
     if streamsData == nil || streamsData is NSNull {
-      print("No streams configured")
       return [:]
     }
 
-    guard let streams = streamsData as? [String: Any] else {
-      print("Invalid streams data format - expected [String: Any], got \(type(of: streamsData))")
+    guard var streams = streamsData as? [String: Any] else {
       return [:]
     }
 
-    print("Processing \(streams.count) total streams: \(Array(streams.keys))")
+    // Filter out "incomplete list" marker from MistServer partial responses
+    streams.removeValue(forKey: "incomplete list")
     return streams
   }
 
   func processStreamStats(_ statsData: Any?) -> [String: Any] {
-    print("processStreamStats - Input type: \(type(of: statsData)), value: \(statsData ?? "nil")")
-
-    // Handle null values gracefully (normal for fresh server)
     if statsData == nil || statsData is NSNull {
-      print("No stream statistics available")
       return [:]
     }
 
     guard let stats = statsData as? [String: Any] else {
-      print(
-        "Invalid stream stats data format - expected [String: Any], got \(type(of: statsData))")
       return [:]
     }
 
-    print("Processing stream statistics for \(stats.count) streams: \(Array(stats.keys))")
     return stats
   }
 
   func processPushList(_ pushListData: Any?) -> [String: Any] {
-    print(
-      "processPushList - Input type: \(type(of: pushListData)), value: \(pushListData ?? "nil")")
-
     // Handle null values gracefully (normal for fresh server)
     if pushListData == nil || pushListData is NSNull {
-      print("No pushes configured")
       return [:]
     }
 
     // MistServer push_list returns array of arrays:
-    // [[ID, "STREAMNAME", "URI_original", "URI_parsed", logs, pushstatus], ...]
+    // [[ID, stream, target_original, target_resolved, logs, stats], ...]
     if let pushArray = pushListData as? [[Any]] {
       var result: [String: Any] = [:]
       for entry in pushArray {
@@ -436,45 +422,40 @@ class DataProcessor {
         }
         let stream = entry[1] as? String ?? "unknown"
         let target = entry[2] as? String ?? "unknown"
+        let resolvedTarget = entry[3] as? String ?? target
 
         var pushInfo: [String: Any] = [
           "id": pushId,
           "stream": stream,
           "target": target,
-          "target_parsed": entry[3] as? String ?? target,
+          "resolved_target": resolvedTarget,
         ]
 
-        // Extract status object if present (index 5)
-        if entry.count > 5, let status = entry[5] as? [String: Any] {
-          for (key, value) in status {
-            pushInfo[key] = value
-          }
+        // Index 4: logs array [[timestamp, level, message], ...]
+        if entry.count > 4, let logs = entry[4] as? [[Any]] {
+          pushInfo["logs"] = logs
+        }
+
+        // Index 5: stats object (keep nested, don't flatten)
+        if entry.count > 5, let stats = entry[5] as? [String: Any] {
+          pushInfo["stats"] = stats
         }
 
         result[String(pushId)] = pushInfo
       }
-      print("Processing \(result.count) active pushes from array format")
       return result
     }
 
     // Fallback: try dict format for backwards compatibility
     if let pushes = pushListData as? [String: Any] {
-      print("Processing \(pushes.count) active pushes from dict format")
       return pushes
     }
 
-    print(
-      "Invalid push list data format - expected [[Any]] or [String: Any], got \(type(of: pushListData))"
-    )
     return [:]
   }
 
   func processClients(_ clientsData: Any?) -> [String: Any] {
-    print("processClients - Input type: \(type(of: clientsData)), value: \(clientsData ?? "nil")")
-
-    // Handle null values gracefully (normal for fresh server)
     if clientsData == nil || clientsData is NSNull {
-      print("No clients connected")
       return [:]
     }
 
@@ -484,6 +465,17 @@ class DataProcessor {
 
       if let data = clientsDict["data"], data is NSNull {
         return [:]
+      } else if let dataArray = clientsDict["data"] as? [[Any]], !fields.isEmpty {
+        // Array-of-arrays format (MistServer 3.9+): each row is a client, no IDs
+        var result: [String: Any] = [:]
+        for (index, row) in dataArray.enumerated() {
+          var info: [String: Any] = [:]
+          for (i, field) in fields.enumerated() where i < row.count {
+            info[field] = row[i]
+          }
+          result["client_\(index)"] = info
+        }
+        return result
       } else if let data = clientsDict["data"] as? [String: Any] {
         // Data may be {clientId: {field: value}} or {clientId: [value1, value2, ...]}
         var result: [String: Any] = [:]
@@ -522,11 +514,9 @@ class DataProcessor {
     }
 
     guard let clients = clientsData as? [String: Any] else {
-      print("Invalid clients data format - expected [String: Any], got \(type(of: clientsData))")
       return [:]
     }
 
-    print("Processing \(clients.count) connected clients: \(Array(clients.keys))")
     return clients
   }
 }
