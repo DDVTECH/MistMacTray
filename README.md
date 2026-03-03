@@ -1,8 +1,8 @@
 # MistTray
 
-A native macOS menu bar app for managing [MistServer](https://mistserver.org). Start/stop the server, manage streams, monitor clients, control pushes, and handle configuration — all from the menu bar.
+A native macOS menu bar app for managing [MistServer](https://mistserver.org). Lives in your menu bar as a status icon with a dropdown menu — no windows, no dock icon. Start/stop the server, manage streams, monitor clients, control pushes, and view logs without opening a browser.
 
-**MistServer is required.** MistTray talks to MistServer's JSON API on `localhost:4242`. It is a companion GUI, not a standalone app.
+**MistServer is required.** MistTray is a companion to MistServer's web UI, not a replacement. It talks to MistServer's JSON API on `localhost:4242`.
 
 ## Install
 
@@ -12,7 +12,7 @@ A native macOS menu bar app for managing [MistServer](https://mistserver.org). S
 brew tap ddvtech/mistserver
 brew install --cask misttray
 ```
-
+ 
 This also installs MistServer as a dependency.
 
 ### Direct download
@@ -37,13 +37,19 @@ open build/Build/Products/Debug/MistTray.app
 
 Requires Xcode 16+ and macOS 12.0+.
 
+## How it works
+
+MistTray talks to MistServer's JSON API on `localhost:4242` and uses `brew services` for server lifecycle (start/stop/restart). It polls every 10 seconds while the server is running. Built with pure Swift and AppKit.
+
 ## Features
 
-- **Server control** — start, stop, restart MistServer via `brew services`
-- **Streams** — list, create, edit, delete streams
-- **Pushes** — start/stop pushes to external platforms (RTMP, SRT, etc.)
-- **Clients** — see connected viewers per stream, disconnect or kick
-- **Configuration** — backup, restore, save, factory reset
+- **Server control** — start, stop, restart MistServer via `brew services`; system info (CPU, RAM, load) in the status section
+- **Streams** — create, edit, delete, nuke streams; manage stream tags
+- **Pushes** — start/stop pushes to external targets (RTMP, SRT, etc.); manage auto-push rules
+- **Clients** — connected viewers grouped by stream; disconnect individual clients, kick all viewers, force re-authentication
+- **Protocols** — see which protocols are active; manage configuration via web UI link
+- **Logs** — last 15 server log entries in a submenu, color-coded by severity
+- **Configuration** — backup, restore, save, factory reset; preferences for auto-update, launch at startup, and notifications
 - Auto-refreshes every 10 seconds while MistServer is running
 
 ## Releasing
