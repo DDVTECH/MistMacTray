@@ -339,6 +339,26 @@ class APIClient {
     let apiCall = ["push_settings": pushSettings]
     makeAPICall(apiCall, completion: completion)
   }
+
+  // MARK: - Authorization Operations
+
+  func checkAuthStatus(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
+    let apiCall: [String: Any] = ["authorize": [String: Any]()]
+    makeAPICall(apiCall, completion: completion)
+  }
+
+  func createAccount(
+    username: String, password: String,
+    completion: @escaping (Result<[String: Any], APIError>) -> Void
+  ) {
+    let apiCall: [String: Any] = [
+      "authorize": [
+        "new_username": username,
+        "new_password": password,
+      ]
+    ]
+    makeAPICall(apiCall, completion: completion)
+  }
 }
 
 // MARK: - Error Types

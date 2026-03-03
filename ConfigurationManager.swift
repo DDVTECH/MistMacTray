@@ -149,8 +149,18 @@ class ConfigurationManager {
       DispatchQueue.main.async {
         switch result {
         case .success:
-          print("Factory reset completed successfully")
-          completion(.success(()))
+          print("Factory reset: config restored to empty, saving to disk...")
+          // Persist the empty config to disk so it survives restart
+          APIClient.shared.saveConfiguration { saveResult in
+            DispatchQueue.main.async {
+              if case .failure(let error) = saveResult {
+                print("Factory reset: save failed: \(error)")
+              } else {
+                print("Factory reset completed and saved")
+              }
+              completion(.success(()))
+            }
+          }
         case .failure(let error):
           print("Factory reset failed: \(error)")
           completion(.failure(error))

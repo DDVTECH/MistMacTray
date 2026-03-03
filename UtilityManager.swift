@@ -207,17 +207,14 @@ class UtilityManager {
   }
 
   func generateStatusText(
-    isRunning: Bool, activeStreams: [String], activePushes: [String: Any], totalViewers: Int
+    isRunning: Bool, serverMode: ServerMode, activeStreams: [String], activePushes: [String: Any],
+    totalViewers: Int
   ) -> String {
     if !isRunning {
-      switch MistServerManager.shared.installStatus() {
-      case .installed:
-        return "MistServer: Stopped"
-      case .notInstalled:
-        return "MistServer: Not Installed"
-      case .noHomebrew:
+      if serverMode == .notFound {
         return "MistServer: Not Installed"
       }
+      return "MistServer: Stopped"
     }
 
     var statusText = "MistServer: Running"

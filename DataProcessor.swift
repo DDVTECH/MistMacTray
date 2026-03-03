@@ -480,15 +480,43 @@ class DataProcessor {
 
     // Handle MistServer's clients data structure: {"data": <null>, "fields": [...], "time": 123}
     if let clientsDict = clientsData as? [String: Any] {
-      print("Clients dict keys: \(Array(clientsDict.keys))")
+      let fields = clientsDict["fields"] as? [String] ?? []
+
       if let data = clientsDict["data"], data is NSNull {
-        print("No clients connected (data field is null)")
         return [:]
       } else if let data = clientsDict["data"] as? [String: Any] {
-        print("Processing \(data.count) connected clients: \(Array(data.keys))")
-        return data
+        // Data may be {clientId: {field: value}} or {clientId: [value1, value2, ...]}
+        var result: [String: Any] = [:]
+        for (clientId, clientValue) in data {
+          if let info = clientValue as? [String: Any] {
+            // Already a named dict
+            result[clientId] = info
+          } else if let values = clientValue as? [Any], !fields.isEmpty {
+            // Positional array — map to named dict using fields
+            var info: [String: Any] = [:]
+            for (index, field) in fields.enumerated() where index < values.count {
+              info[field] = values[index]
+            }
+            result[clientId] = info
+          }
+        }
+        return result
+      } else if !fields.isEmpty {
+        // No "data" key but has fields — try the dict itself minus metadata keys
+        var result: [String: Any] = [:]
+        for (key, value) in clientsDict where key != "fields" && key != "time" {
+          if let values = value as? [Any] {
+            var info: [String: Any] = [:]
+            for (index, field) in fields.enumerated() where index < values.count {
+              info[field] = values[index]
+            }
+            result[key] = info
+          } else if let info = value as? [String: Any] {
+            result[key] = info
+          }
+        }
+        return result
       } else {
-        print("Processing clients data structure with keys: \(Array(clientsDict.keys))")
         return clientsDict
       }
     }
