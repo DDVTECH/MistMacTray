@@ -77,6 +77,8 @@ Set these in **Settings > Secrets and variables > Actions**:
 | `DEVELOPER_ID` | Certificate common name, e.g. `DDVTech (AB12C3D4E5)` |
 | `APPLE_ID` | Apple ID email used for notarization |
 | `APP_SPECIFIC_PASSWORD` | App-specific password from [appleid.apple.com](https://appleid.apple.com) |
+| `HOMEBREW_APP_ID` | GitHub App ID for the DDVTech CI app (used to auto-update the Homebrew cask) |
+| `HOMEBREW_APP_PRIVATE_KEY` | Private key (`.pem`) for the DDVTech CI GitHub App |
 
 Also enable **Settings > Actions > General > Workflow permissions > Read and write permissions** so the workflow can upload release assets.
 
