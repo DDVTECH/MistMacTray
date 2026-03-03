@@ -420,14 +420,53 @@ class DataProcessor {
       return [:]
     }
 
-    guard let pushes = pushListData as? [String: Any] else {
-      print(
-        "Invalid push list data format - expected [String: Any], got \(type(of: pushListData))")
-      return [:]
+    // MistServer push_list returns array of arrays:
+    // [[ID, "STREAMNAME", "URI_original", "URI_parsed", logs, pushstatus], ...]
+    if let pushArray = pushListData as? [[Any]] {
+      var result: [String: Any] = [:]
+      for entry in pushArray {
+        guard entry.count >= 4 else { continue }
+        let pushId: Int
+        if let id = entry[0] as? Int {
+          pushId = id
+        } else if let id = entry[0] as? NSNumber {
+          pushId = id.intValue
+        } else {
+          continue
+        }
+        let stream = entry[1] as? String ?? "unknown"
+        let target = entry[2] as? String ?? "unknown"
+
+        var pushInfo: [String: Any] = [
+          "id": pushId,
+          "stream": stream,
+          "target": target,
+          "target_parsed": entry[3] as? String ?? target,
+        ]
+
+        // Extract status object if present (index 5)
+        if entry.count > 5, let status = entry[5] as? [String: Any] {
+          for (key, value) in status {
+            pushInfo[key] = value
+          }
+        }
+
+        result[String(pushId)] = pushInfo
+      }
+      print("Processing \(result.count) active pushes from array format")
+      return result
     }
 
-    print("Processing \(pushes.count) active pushes: \(Array(pushes.keys))")
-    return pushes
+    // Fallback: try dict format for backwards compatibility
+    if let pushes = pushListData as? [String: Any] {
+      print("Processing \(pushes.count) active pushes from dict format")
+      return pushes
+    }
+
+    print(
+      "Invalid push list data format - expected [[Any]] or [String: Any], got \(type(of: pushListData))"
+    )
+    return [:]
   }
 
   func processClients(_ clientsData: Any?) -> [String: Any] {

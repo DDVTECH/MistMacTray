@@ -29,11 +29,6 @@ import Cocoa
   func kickAllViewers(_ sender: NSMenuItem)
   func forceReauth(_ sender: NSMenuItem)
 
-  // Protocol Actions
-  func enableProtocol(_ sender: NSMenuItem)
-  func disableProtocol(_ sender: NSMenuItem)
-  func configureProtocol(_ sender: NSMenuItem)
-
   // Configuration Actions
   func backupConfiguration()
   func restoreConfiguration()
@@ -42,7 +37,6 @@ import Cocoa
 
   // Monitoring Actions
   func refreshMonitoring()
-  func refreshProtocols()
 }
 
 class MenuBuilder {
@@ -105,12 +99,12 @@ class MenuBuilder {
 
   func buildMainMenu(
     serverRunning: Bool, streams: [String: Any], pushes: [String: Any], clients: [String: Any],
-    protocols: [String: Any]
+    protocols: [String: Any], serverLogs: [[Any]] = [], capabilities: [String: Any] = [:]
   ) -> NSMenu {
     let menu = NSMenu()
 
     // Server Status Section
-    addServerSection(to: menu, serverRunning: serverRunning)
+    addServerSection(to: menu, serverRunning: serverRunning, capabilities: capabilities)
     menu.addItem(NSMenuItem.separator())
 
     // Streams Section
@@ -129,6 +123,12 @@ class MenuBuilder {
     addProtocolsSection(to: menu, protocols: protocols)
     menu.addItem(NSMenuItem.separator())
 
+    // Logs Section
+    if !serverLogs.isEmpty {
+      addLogsSection(to: menu, logs: serverLogs)
+      menu.addItem(NSMenuItem.separator())
+    }
+
     // Configuration Section
     addConfigurationSection(to: menu)
     menu.addItem(NSMenuItem.separator())
@@ -143,12 +143,24 @@ class MenuBuilder {
 
   // MARK: - Server Section
 
-  private func addServerSection(to menu: NSMenu, serverRunning: Bool) {
+  private func addServerSection(
+    to menu: NSMenu, serverRunning: Bool, capabilities: [String: Any] = [:]
+  ) {
     let statusTitle = serverRunning ? "MistServer Running" : "MistServer Stopped"
     let statusColor: NSColor = serverRunning ? .systemGreen : .systemRed
     let statusItem = makeItem(title: statusTitle, symbol: "circle.fill", tintColor: statusColor)
     statusItem.isEnabled = false
     menu.addItem(statusItem)
+
+    // System info from capabilities
+    if serverRunning, !capabilities.isEmpty {
+      let sysInfo = UtilityManager.shared.formatSystemStats(capabilities)
+      if !sysInfo.isEmpty {
+        let sysItem = makeItem(title: sysInfo, symbol: "cpu")
+        sysItem.isEnabled = false
+        menu.addItem(sysItem)
+      }
+    }
 
     let webUIItem = makeItem(
       title: "Open Web UI", symbol: "globe",
@@ -275,7 +287,8 @@ class MenuBuilder {
             title: "Stop Push: \(stream) \u{2192} \(target)", symbol: "stop.fill",
             action: #selector(MenuBuilderDelegate.stopPush(_:)))
           stopItem.target = delegate
-          stopItem.representedObject = pushId
+          // Store push ID as Int for push_stop API (which expects integer IDs)
+          stopItem.representedObject = data["id"] as? Int ?? Int(pushId)
           menu.addItem(stopItem)
         }
       }
@@ -359,11 +372,12 @@ class MenuBuilder {
     protocolsHeader.isEnabled = false
     menu.addItem(protocolsHeader)
 
-    let refreshItem = makeItem(
-      title: "Refresh Protocols", symbol: "arrow.clockwise",
-      action: #selector(MenuBuilderDelegate.refreshProtocols))
-    refreshItem.target = delegate
-    menu.addItem(refreshItem)
+    // Protocol management requires full config objects — direct to web UI
+    let manageItem = makeItem(
+      title: "Manage in Web UI", symbol: "globe",
+      action: #selector(MenuBuilderDelegate.openWebUI))
+    manageItem.target = delegate
+    menu.addItem(manageItem)
 
     if !protocols.isEmpty {
       for (protocolName, protocolData) in protocols {
@@ -371,38 +385,75 @@ class MenuBuilder {
           let isEnabled = (data["online"] as? Int) == 1
           let statusColor: NSColor = isEnabled ? .systemGreen : .systemRed
 
-          let protocolSubmenu = NSMenu()
-
-          if isEnabled {
-            let disableItem = makeItem(
-              title: "Disable", symbol: "stop.fill",
-              action: #selector(MenuBuilderDelegate.disableProtocol(_:)))
-            disableItem.target = delegate
-            disableItem.representedObject = protocolName
-            protocolSubmenu.addItem(disableItem)
-          } else {
-            let enableItem = makeItem(
-              title: "Enable", symbol: "play.fill",
-              action: #selector(MenuBuilderDelegate.enableProtocol(_:)))
-            enableItem.target = delegate
-            enableItem.representedObject = protocolName
-            protocolSubmenu.addItem(enableItem)
-          }
-
-          let configureItem = makeItem(
-            title: "Configure", symbol: "gearshape",
-            action: #selector(MenuBuilderDelegate.configureProtocol(_:)))
-          configureItem.target = delegate
-          configureItem.representedObject = protocolName
-          protocolSubmenu.addItem(configureItem)
-
           let protocolItem = makeItem(
             title: protocolName, symbol: "circle.fill", tintColor: statusColor)
-          protocolItem.submenu = protocolSubmenu
+          protocolItem.isEnabled = false
           menu.addItem(protocolItem)
         }
       }
     }
+  }
+
+  // MARK: - Logs Section
+
+  private func addLogsSection(to menu: NSMenu, logs: [[Any]]) {
+    let logsSubmenu = NSMenu()
+
+    // Show last 15 entries, most recent first
+    let recentLogs = Array(logs.suffix(15).reversed())
+
+    for entry in recentLogs {
+      guard entry.count >= 3 else { continue }
+
+      let timestamp = entry[0] as? Int ?? 0
+      let logType = entry[1] as? String ?? "INFO"
+      let message = entry[2] as? String ?? ""
+
+      let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
+      let formatter = DateFormatter()
+      formatter.dateFormat = "HH:mm:ss"
+      let timeStr = formatter.string(from: date)
+
+      // Truncate long messages for menu display
+      let displayMsg = message.count > 60 ? String(message.prefix(57)) + "..." : message
+      let title = "[\(timeStr)] \(logType): \(displayMsg)"
+
+      let symbol: String
+      let color: NSColor
+      switch logType.uppercased() {
+      case "ERROR", "FAIL":
+        symbol = "exclamationmark.circle"
+        color = .systemRed
+      case "WARN":
+        symbol = "exclamationmark.triangle"
+        color = .systemOrange
+      default:
+        symbol = "info.circle"
+        color = .secondaryLabelColor
+      }
+
+      let logItem = makeItem(title: title, symbol: symbol, tintColor: color)
+      logItem.isEnabled = false
+      logsSubmenu.addItem(logItem)
+    }
+
+    if recentLogs.isEmpty {
+      let emptyItem = makeItem(title: "No log entries", symbol: "info.circle")
+      emptyItem.isEnabled = false
+      logsSubmenu.addItem(emptyItem)
+    }
+
+    logsSubmenu.addItem(NSMenuItem.separator())
+
+    let webItem = makeItem(
+      title: "View All in Web UI", symbol: "globe",
+      action: #selector(MenuBuilderDelegate.openWebUI))
+    webItem.target = delegate
+    logsSubmenu.addItem(webItem)
+
+    let logsItem = makeItem(title: "Recent Logs", symbol: "doc.text")
+    logsItem.submenu = logsSubmenu
+    menu.addItem(logsItem)
   }
 
   // MARK: - Configuration Section

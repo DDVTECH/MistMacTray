@@ -21,6 +21,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
   // MARK: - Data Cache Properties (for menu building)
   var lastProtocolData: [String: Any] = [:]
+  var serverLogs: [[Any]] = []
+  var serverCapabilities: [String: Any] = [:]
 
   // MARK: - Component Managers
   private var menuBuilder: MenuBuilder!
@@ -49,18 +51,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       streams: allStreams,
       pushes: activePushes,
       clients: connectedClients,
-      protocols: lastProtocolData
+      protocols: lastProtocolData,
+      serverLogs: serverLogs,
+      capabilities: serverCapabilities
     )
 
     // 3) Update status text
     updateStatusText()
 
-    // 4) Schedule regular data updates (every 10 seconds)
+    // 4) Fetch capabilities (rarely changes, fetch once on launch)
+    fetchCapabilities()
+
+    // 5) Schedule regular data updates (every 10 seconds)
     activeStreamsTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
       if MistServerManager.shared.isMistServerRunning() {
         self.updateAllData()
       } else {
         self.updateStatusText(checkStreams: false)
+      }
+    }
+  }
+
+  private func fetchCapabilities() {
+    APIClient.shared.fetchCapabilities { [weak self] result in
+      DispatchQueue.main.async {
+        switch result {
+        case .success(let data):
+          if let capabilities = data["capabilities"] as? [String: Any] {
+            self?.serverCapabilities = capabilities
+          } else {
+            self?.serverCapabilities = data
+          }
+          self?.rebuildMenu()
+        case .failure:
+          // Capabilities are optional, don't show error
+          break
+        }
       }
     }
   }
@@ -269,7 +295,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       #selector(saveConfiguration),
       #selector(factoryReset),
       #selector(refreshMonitoring),
-      #selector(refreshProtocols),
     ]
 
     // Find and update menu items
@@ -398,8 +423,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       showNotifications: UserDefaults.standard.bool(forKey: "ShowNotifications")
     )
 
-    DialogManager.shared.showPreferencesDialog(currentSettings: currentSettings) {
-      [weak self] preferences in
+    DialogManager.shared.showPreferencesDialog(currentSettings: currentSettings) { preferences in
       guard let preferences = preferences else { return }
 
       // Save preferences to UserDefaults
@@ -472,7 +496,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       lastProtocolData = [:]
     }
 
-    // 7. Update UI with the complete, consistent state
+    // 7. Process server logs
+    if let logs = serverData["log"] as? [[Any]] {
+      serverLogs = logs
+    }
+
+    // 8. Update UI with the complete, consistent state
     updateStatusText(checkStreams: false)
     rebuildMenu()
 
@@ -494,7 +523,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
       streams: allStreams,
       pushes: activePushes,
       clients: connectedClients,
-      protocols: lastProtocolData
+      protocols: lastProtocolData,
+      serverLogs: serverLogs,
+      capabilities: serverCapabilities
     )
   }
 
@@ -583,42 +614,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
 
     // Use existing protocol data from unified state
     DialogManager.shared.showActiveProtocols(protocols: lastProtocolData)
-  }
-
-  func showProtocolConfigWindow(_ protocolName: String) {
-    DialogManager.shared.showProtocolConfigurationDialog(protocolName: protocolName) {
-      [weak self] config in
-      if let protocolConfig = config {
-        print("Protocol configuration updated: \(protocolConfig)")
-        self?.refreshAllData()
-      }
-    }
-  }
-
-  func getDefaultPort(for protocolName: String) -> String {
-    return UtilityManager.shared.getDefaultPort(for: protocolName)
-  }
-
-  func performProtocolAction(apiCall: [String: Any], actionName: String, protocolName: String) {
-    print("Sending \(actionName) protocol request for \(protocolName)...")
-
-    APIClient.shared.performProtocolAction(apiCall: apiCall) { result in
-      DispatchQueue.main.async {
-        switch result {
-        case .success(let data):
-          print("\(actionName.capitalized) protocol response: \(data)")
-          DialogManager.shared.showSuccessAlert(
-            title: "Protocol \(actionName.capitalized)d",
-            message: "\(protocolName) protocol has been \(actionName)d successfully.")
-        case .failure(let error):
-          print("\(actionName.capitalized) protocol error: \(error)")
-          DialogManager.shared.showErrorAlert(
-            title: "Protocol \(actionName.capitalized) Failed",
-            message:
-              "Failed to \(actionName) \(protocolName) protocol: \(error.localizedDescription)")
-        }
-      }
-    }
   }
 
   // MARK: — Auto-Push Rules Management
@@ -860,7 +855,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   }
 
   @objc func stopPush(_ sender: NSMenuItem) {
-    guard let pushId = sender.representedObject as? String else { return }
+    guard let pushId = sender.representedObject as? Int else { return }
     print("MistTray: stopping push: \(pushId)")
 
     pushManager.stopPush(pushId: pushId) { [weak self] result in
@@ -942,57 +937,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
             title: "Re-auth Failed",
             message: "Failed to force re-authentication: \(error.localizedDescription)")
         }
-      }
-    }
-  }
-
-  @objc func enableProtocol(_ sender: NSMenuItem) {
-    guard let protocolName = sender.representedObject as? String else { return }
-    print("MistTray: enabling protocol: \(protocolName)")
-
-    let apiCall = ["protocol_enable": protocolName]
-    APIClient.shared.performProtocolAction(apiCall: apiCall) { [weak self] result in
-      DispatchQueue.main.async {
-        switch result {
-        case .success:
-          print("Protocol enabled successfully")
-          self?.refreshAllData()
-        case .failure(let error):
-          DialogManager.shared.showErrorAlert(
-            title: "Error", message: "Failed to enable protocol: \(error.localizedDescription)")
-        }
-      }
-    }
-  }
-
-  @objc func disableProtocol(_ sender: NSMenuItem) {
-    guard let protocolName = sender.representedObject as? String else { return }
-    print("MistTray: disabling protocol: \(protocolName)")
-
-    let apiCall = ["protocol_disable": protocolName]
-    APIClient.shared.performProtocolAction(apiCall: apiCall) { [weak self] result in
-      DispatchQueue.main.async {
-        switch result {
-        case .success:
-          print("Protocol disabled successfully")
-          self?.refreshAllData()
-        case .failure(let error):
-          DialogManager.shared.showErrorAlert(
-            title: "Error", message: "Failed to disable protocol: \(error.localizedDescription)")
-        }
-      }
-    }
-  }
-
-  @objc func configureProtocol(_ sender: NSMenuItem) {
-    guard let protocolName = sender.representedObject as? String else { return }
-    print("MistTray: configuring protocol: \(protocolName)")
-
-    DialogManager.shared.showProtocolConfigurationDialog(protocolName: protocolName) {
-      [weak self] config in
-      if let protocolConfig = config {
-        print("Protocol configuration updated: \(protocolConfig)")
-        self?.refreshAllData()
       }
     }
   }
@@ -1095,11 +1039,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MenuBuilderDelegate {
   @objc func refreshMonitoring() {
     print("MistTray: refreshing monitoring data...")
     refreshAllData()
-  }
-
-  @objc func refreshProtocols() {
-    print("MistTray: refreshing protocols...")
-    refreshAllData()
+    fetchCapabilities()
   }
 
   // MARK: - Session Management

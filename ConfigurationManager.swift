@@ -176,25 +176,6 @@ class ConfigurationManager {
     return true
   }
 
-  // MARK: - Protocol Configuration
-
-  func fetchProtocolConfig(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    APIClient.shared.fetchProtocolConfig(completion: completion)
-  }
-
-  func performProtocolAction(
-    apiCall: [String: Any], completion: @escaping (Result<Void, APIError>) -> Void
-  ) {
-    APIClient.shared.performProtocolAction(apiCall: apiCall) { result in
-      switch result {
-      case .success:
-        completion(.success(()))
-      case .failure(let error):
-        completion(.failure(error))
-      }
-    }
-  }
-
   // MARK: - Push Settings
 
   func applyPushSettings(

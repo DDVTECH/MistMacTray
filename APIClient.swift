@@ -64,7 +64,6 @@ class APIClient {
         if let json = try JSONSerialization.jsonObject(with: data) as? T {
           print("API Response: Success")
 
-          // Add detailed response logging for debugging
           if let jsonDict = json as? [String: Any] {
             print("Full API Response Data:")
             for (key, value) in jsonDict {
@@ -152,12 +151,7 @@ class APIClient {
     streamName: String, tagName: String,
     completion: @escaping (Result<[String: Any], APIError>) -> Void
   ) {
-    let apiCall = [
-      "addtag": [
-        "stream": streamName,
-        "tag": tagName,
-      ]
-    ]
+    let apiCall: [String: Any] = ["tag_stream": [streamName: tagName]]
     makeAPICall(apiCall, completion: completion)
   }
 
@@ -165,12 +159,7 @@ class APIClient {
     streamName: String, tagName: String,
     completion: @escaping (Result<[String: Any], APIError>) -> Void
   ) {
-    let apiCall = [
-      "deltag": [
-        "stream": streamName,
-        "tag": tagName,
-      ]
-    ]
+    let apiCall: [String: Any] = ["untag_stream": [streamName: tagName]]
     makeAPICall(apiCall, completion: completion)
   }
 
@@ -207,8 +196,8 @@ class APIClient {
     makeAPICall(apiCall, completion: completion)
   }
 
-  func stopPush(pushId: String, completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["push_stop": pushId]
+  func stopPush(pushId: Int, completion: @escaping (Result<[String: Any], APIError>) -> Void) {
+    let apiCall: [String: Any] = ["push_stop": pushId]
     makeAPICall(apiCall, completion: completion)
   }
 
@@ -242,40 +231,28 @@ class APIClient {
   func disconnectClient(
     sessionId: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
   ) {
-    let apiCall = ["stop_sessID": sessionId]
-    makeAPICall(apiCall, completion: completion)
-  }
-
-  func disconnectClientLegacy(
-    sessionId: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
-  ) {
-    let apiCall = ["disconnect": sessionId]
+    let apiCall = ["stop_sessid": sessionId]
     makeAPICall(apiCall, completion: completion)
   }
 
   func kickAllViewers(
     streamName: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
   ) {
-    let apiCall = ["kick": streamName]
+    let apiCall = ["stop_sessions": streamName]
     makeAPICall(apiCall, completion: completion)
   }
 
   func forceReauthentication(
     streamName: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
   ) {
-    let apiCall = ["reauth": streamName]
+    let apiCall = ["invalidate_sessions": streamName]
     makeAPICall(apiCall, completion: completion)
   }
 
   func tagSession(
     sessionId: String, tag: String, completion: @escaping (Result<[String: Any], APIError>) -> Void
   ) {
-    let apiCall = [
-      "tag_sessID": [
-        "sessID": sessionId,
-        "tag": tag,
-      ]
-    ]
+    let apiCall: [String: Any] = ["tag_sessid": [sessionId: tag]]
     makeAPICall(apiCall, completion: completion)
   }
 
@@ -288,19 +265,15 @@ class APIClient {
 
   // MARK: - Monitoring Operations
 
-  func fetchServerStatus(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["active_streams": true, "totals": true, "clients": true]
-    makeAPICallWithRetry(apiCall, completion: completion)
-  }
-
   func fetchAllServerData(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
     let apiCall: [String: Any] = [
       "active_streams": true,
-      "streams": true,  // Get ALL streams, not just active ones
+      "streams": true,
       "stats_streams": true,
       "push_list": true,
       "config": true,
       "totals": true,
+      "log": true,
       "clients": [
         "fields": ["host", "stream", "protocol", "conntime", "sessId"]
       ],
@@ -308,67 +281,33 @@ class APIClient {
     makeAPICallWithRetry(apiCall, completion: completion)
   }
 
-  func fetchStreamStatistics(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["active_streams": true, "totals": true]
-    makeAPICall(apiCall, completion: completion)
-  }
-
-  func fetchServerTotals(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["totals": true]
-    makeAPICall(apiCall) { (result: Result<[String: Any], APIError>) in
-      switch result {
-      case .success(let data):
-        if let totals = data["totals"] as? [String: Any] {
-          completion(.success(totals))
-        } else {
-          completion(.success([:]))
-        }
-      case .failure(let error):
-        completion(.failure(error))
-      }
-    }
-  }
-
-  func fetchClientStatistics(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["clients": true]
-    makeAPICall(apiCall, completion: completion)
-  }
-
-  func fetchPushStatistics(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["active_pushes": true]
-    makeAPICall(apiCall, completion: completion)
-  }
-
   func fetchConfiguration(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
     let apiCall = ["config": true]
     makeAPICall(apiCall, completion: completion)
   }
 
-  func updateConfiguration(
-    _ config: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
-  ) {
-    let apiCall = ["config": config]
-    makeAPICall(apiCall, completion: completion)
-  }
-
-  // MARK: - Protocol Operations
-
-  func fetchProtocolConfig(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["config": ["protocols": true]]
-    makeAPICall(apiCall, completion: completion)
-  }
-
-  func performProtocolAction(
-    apiCall: [String: Any], completion: @escaping (Result<[String: Any], APIError>) -> Void
-  ) {
+  func fetchCapabilities(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
+    let apiCall: [String: Any] = ["capabilities": true]
     makeAPICall(apiCall, completion: completion)
   }
 
   // MARK: - Configuration Operations
 
   func backupConfiguration(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["config": true]
-    makeAPICall(apiCall, completion: completion)
+    let apiCall: [String: Any] = ["config_backup": true]
+    makeAPICall(apiCall) { (result: Result<[String: Any], APIError>) in
+      switch result {
+      case .success(let data):
+        if let backup = data["config_backup"] as? [String: Any] {
+          completion(.success(backup))
+        } else {
+          // Fallback: return full response if config_backup key not found
+          completion(.success(data))
+        }
+      case .failure(let error):
+        completion(.failure(error))
+      }
+    }
   }
 
   func restoreConfiguration(
@@ -399,72 +338,6 @@ class APIClient {
     ]
     let apiCall = ["push_settings": pushSettings]
     makeAPICall(apiCall, completion: completion)
-  }
-
-  // MARK: - Update Operations
-
-  func checkForUpdates(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["checkupdate": true]
-    makeAPICall(apiCall, completion: completion)
-  }
-
-  func performUpdate(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    let apiCall = ["update": true]
-    var request = URLRequest(url: URL(string: baseURL)!)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.httpBody = try? JSONSerialization.data(withJSONObject: apiCall)
-    request.timeoutInterval = 30.0  // Updates might take longer
-
-    print("API Call (Update): \(apiCall)")
-
-    session.dataTask(with: request) { data, response, error in
-      if let error = error {
-        print("Update API Error: \(error)")
-        DispatchQueue.main.async {
-          completion(.failure(.networkError(error)))
-        }
-        return
-      }
-
-      guard let data = data else {
-        print("No data received for update")
-        DispatchQueue.main.async {
-          completion(.failure(.noData))
-        }
-        return
-      }
-
-      if let httpResponse = response as? HTTPURLResponse {
-        print("Update API Response status: \(httpResponse.statusCode)")
-
-        if httpResponse.statusCode != 200 {
-          DispatchQueue.main.async {
-            completion(.failure(.httpError(httpResponse.statusCode)))
-          }
-          return
-        }
-      }
-
-      do {
-        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-          print("Update API Response: Success")
-          DispatchQueue.main.async {
-            completion(.success(json))
-          }
-        } else {
-          print("Failed to parse update response")
-          DispatchQueue.main.async {
-            completion(.failure(.parseError))
-          }
-        }
-      } catch {
-        print("Update JSON parsing error: \(error)")
-        DispatchQueue.main.async {
-          completion(.failure(.parseError))
-        }
-      }
-    }.resume()
   }
 }
 

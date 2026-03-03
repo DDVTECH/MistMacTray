@@ -31,7 +31,7 @@ class PushManager {
     }
   }
 
-  func stopPush(pushId: String, completion: @escaping (Result<Void, APIError>) -> Void) {
+  func stopPush(pushId: Int, completion: @escaping (Result<Void, APIError>) -> Void) {
     print("PushManager: Stopping push '\(pushId)'")
 
     APIClient.shared.stopPush(pushId: pushId) { result in
@@ -48,10 +48,6 @@ class PushManager {
     }
   }
 
-  func listActivePushes(completion: @escaping (Result<[String: Any], APIError>) -> Void) {
-    APIClient.shared.fetchPushStatistics(completion: completion)
-  }
-
   // MARK: - Auto-Push Rules
 
   func createAutoPushRule(
@@ -66,7 +62,6 @@ class PushManager {
         switch result {
         case .success(let response):
           print("Auto push rule created successfully")
-          // Extract rule ID from response if available
           if let ruleId = response["id"] as? String {
             completion(.success(ruleId))
           } else {
@@ -100,12 +95,10 @@ class PushManager {
   func validatePushConfiguration(streamName: String, targetURL: String) -> PushValidationResult {
     var errors: [String] = []
 
-    // Validate stream name
     if streamName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       errors.append("Stream name cannot be empty")
     }
 
-    // Validate target URL
     if targetURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       errors.append("Target URL cannot be empty")
     } else if !isValidPushURL(targetURL) {
@@ -116,41 +109,13 @@ class PushManager {
   }
 
   private func isValidPushURL(_ url: String) -> Bool {
-    // Check for common push protocols
     let validPrefixes = [
       "rtmp://", "rtmps://", "srt://", "udp://", "file://", "http://", "https://",
     ]
     return validPrefixes.contains { url.lowercased().hasPrefix($0) }
   }
 
-  // MARK: - Push Statistics
-
-  func getPushStatistics(
-    pushId: String, completion: @escaping (Result<PushStatistics, APIError>) -> Void
-  ) {
-    APIClient.shared.fetchPushStatistics(completion: { result in
-      switch result {
-      case .success(let data):
-        let activePushes = data["active_pushes"] as? [String: Any] ?? [:]
-        let pushData = activePushes[pushId] as? [String: Any] ?? [:]
-        let stats = PushStatistics(
-          pushId: pushId,
-          bytesOut: pushData["bytes_out"] as? Int ?? pushData["bytes"] as? Int ?? 0,
-          packetsOut: pushData["packets_out"] as? Int ?? 0,
-          uptime: pushData["uptime"] as? Int ?? pushData["active_seconds"] as? Int ?? 0,
-          status: pushData["status"] as? String ?? "unknown"
-        )
-        completion(.success(stats))
-      case .failure(let error):
-        completion(.failure(error))
-      }
-    })
-  }
-
-  // MARK: - Push Data Processing (removed - now handled by unified state management)
-
-  // Legacy method removed to eliminate redundant code paths
-  // All data processing now happens through AppDelegate.refreshAllData() → updateCompleteState()
+  // MARK: - Push Settings
 
   func performPushStart(
     streamName: String, targetURL: String, completion: @escaping (Result<Void, APIError>) -> Void
@@ -172,7 +137,6 @@ class PushManager {
     let autoStart = settings["autoStart"] as? Bool ?? false
 
     if autoStart {
-      // Create auto push rule
       createAutoPushRule(streamPattern: streamName, targetURL: targetURL) { result in
         switch result {
         case .success:
@@ -182,7 +146,6 @@ class PushManager {
         }
       }
     } else {
-      // Just start the push manually
       startPush(streamName: streamName, targetURL: targetURL, completion: completion)
     }
   }
@@ -193,20 +156,4 @@ class PushManager {
 struct PushValidationResult {
   let isValid: Bool
   let errors: [String]
-}
-
-struct PushStatistics {
-  let pushId: String
-  let bytesOut: Int
-  let packetsOut: Int
-  let uptime: Int
-  let status: String
-
-  var formattedBytesOut: String {
-    return DataProcessor.shared.formatBytes(bytesOut)
-  }
-
-  var formattedUptime: String {
-    return DataProcessor.shared.formatConnectionTime(uptime)
-  }
 }

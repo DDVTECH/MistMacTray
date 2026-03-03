@@ -239,6 +239,44 @@ class UtilityManager {
     return statusText
   }
 
+  // MARK: - System Stats Formatting
+
+  func formatSystemStats(_ capabilities: [String: Any]) -> String {
+    var parts: [String] = []
+
+    // CPU usage percentage
+    if let cpu = capabilities["cpu"] as? [String: Any],
+      let usage = cpu["use"] as? Int
+    {
+      parts.append("CPU: \(usage)%")
+    } else if let cpuUse = capabilities["cpu_use"] as? Int {
+      parts.append("CPU: \(cpuUse)%")
+    }
+
+    // Memory: used / total
+    if let mem = capabilities["mem"] as? [String: Any],
+      let used = mem["used"] as? Int,
+      let total = mem["total"] as? Int
+    {
+      let usedGB = Double(used) / 1024.0
+      let totalGB = Double(total) / 1024.0
+      parts.append(String(format: "RAM: %.1f/%.1f GB", usedGB, totalGB))
+    }
+
+    // Load average
+    if let load = capabilities["load"] as? [String: Any],
+      let avg1 = load["one"] as? Double
+    {
+      parts.append(String(format: "Load: %.2f", avg1))
+    } else if let load = capabilities["load"] as? [String: Any],
+      let avg1 = load["one"] as? Int
+    {
+      parts.append("Load: \(avg1)")
+    }
+
+    return parts.joined(separator: " | ")
+  }
+
   // MARK: - Protocol Utilities
 
   func getDefaultPort(for protocolName: String) -> String {
