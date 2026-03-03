@@ -88,10 +88,9 @@ jobs:
                      -exportPath "$RUNNER_TEMP" \
                      -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist"
 
-      - name: Verify Signature
+      - name: Verify Codesign
         run: |
           codesign --verify --verbose=2 "$RUNNER_TEMP/$APP_NAME.app"
-          spctl -a -vvv "$RUNNER_TEMP/$APP_NAME.app"
 
       - name: Create ZIP for Notarization
         run: |
@@ -112,6 +111,10 @@ jobs:
 
           xcrun stapler staple "$RUNNER_TEMP/$APP_NAME.app"
           xcrun stapler validate "$RUNNER_TEMP/$APP_NAME.app"
+
+      - name: Verify Gatekeeper
+        run: |
+          spctl -a -vvv "$RUNNER_TEMP/$APP_NAME.app"
 
       - name: Create Distribution Packages
         run: |
