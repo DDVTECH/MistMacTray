@@ -114,6 +114,7 @@ class AppState {
     let timestamp: Date
     let viewers: Int
     let bpsOut: Int
+    let bpsIn: Int
   }
 
   var totalsHistory: [TotalsSnapshot] = []
@@ -138,7 +139,8 @@ class AppState {
       let snapshot = StreamSnapshot(
         timestamp: Date(),
         viewers: streamViewerCount(name),
-        bpsOut: streamBandwidth(name)
+        bpsOut: streamBandwidth(name),
+        bpsIn: streamBandwidthIn(name)
       )
       var history = streamHistory[name] ?? []
       history.append(snapshot)
@@ -199,6 +201,19 @@ class AppState {
       counts[proto, default: 0] += 1
     }
     return counts
+  }
+
+  var clientProtocolBandwidth: [String: Int] {
+    var bandwidth: [String: Int] = [:]
+    for (_, value) in connectedClients {
+      guard let info = value as? [String: Any],
+        let proto = info["protocol"] as? String
+      else { continue }
+      let down = info["downbps"] as? Int ?? 0
+      let up = info["upbps"] as? Int ?? 0
+      bandwidth[proto, default: 0] += down + up
+    }
+    return bandwidth
   }
 
   // MARK: - Reset

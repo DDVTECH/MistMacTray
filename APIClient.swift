@@ -296,7 +296,7 @@ class APIClient {
       "jwks": true,
       "streamkeys": true,
       "clients": [
-        "fields": ["host", "stream", "protocol", "conntime", "downbps", "upbps"]
+        "fields": ["host", "stream", "protocol", "conntime", "downbps", "upbps", "down", "pktlost", "pktretransmit", "sessId"]
       ],
     ]
     makeAPICallWithRetry(apiCall, completion: completion)

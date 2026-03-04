@@ -138,43 +138,92 @@ struct StreamDetailView: View {
                     label: "Viewers",
                     currentValue: "\(viewers)"
                   )
-                }
-
-                let bwOut = appState.streamBandwidth(streamName)
-                let bwIn = appState.streamBandwidthIn(streamName)
-                HStack {
-                  Text("BW Out")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                  Spacer()
-                  Text(DataProcessor.shared.formatBandwidth(bwOut))
-                    .font(.system(.body, design: .rounded, weight: .semibold))
-                }
-                if bwIn > 0 {
+                  SparklineChart(
+                    data: history.map { ($0.timestamp, Double($0.bpsOut)) },
+                    color: .tnGreen,
+                    label: "BW Out",
+                    currentValue: DataProcessor.shared.formatBandwidth(appState.streamBandwidth(streamName))
+                  )
+                  let bwIn = appState.streamBandwidthIn(streamName)
+                  if bwIn > 0 {
+                    SparklineChart(
+                      data: history.map { ($0.timestamp, Double($0.bpsIn)) },
+                      color: .tnOrange,
+                      label: "BW In",
+                      currentValue: DataProcessor.shared.formatBandwidth(bwIn)
+                    )
+                  }
+                } else {
+                  let bwOut = appState.streamBandwidth(streamName)
+                  let bwIn = appState.streamBandwidthIn(streamName)
                   HStack {
-                    Text("BW In")
+                    Text("BW Out")
                       .font(.caption)
                       .foregroundStyle(.secondary)
                     Spacer()
-                    Text(DataProcessor.shared.formatBandwidth(bwIn))
+                    Text(DataProcessor.shared.formatBandwidth(bwOut))
                       .font(.system(.body, design: .rounded, weight: .semibold))
+                  }
+                  if bwIn > 0 {
+                    HStack {
+                      Text("BW In")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                      Spacer()
+                      Text(DataProcessor.shared.formatBandwidth(bwIn))
+                        .font(.system(.body, design: .rounded, weight: .semibold))
+                    }
                   }
                 }
               }
             }
           }
 
-          if isOnline && !trackSummaries.isEmpty {
+          if isOnline && !parsedTracks.isEmpty {
             GroupBox("Tracks") {
-              VStack(alignment: .leading, spacing: 4) {
-                ForEach(trackSummaries, id: \.self) { summary in
-                  HStack(spacing: 6) {
-                    Image(systemName: summary.hasPrefix("Video") ? "film" : summary.hasPrefix("Audio") ? "speaker.wave.2" : "doc.text")
+              VStack(alignment: .leading, spacing: 6) {
+                ForEach(parsedTracks) { track in
+                  VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                      Image(systemName: track.type.lowercased() == "video" ? "film" : track.type.lowercased() == "audio" ? "speaker.wave.2" : "doc.text")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                      Text(track.summary)
+                        .font(.system(size: 11, design: .monospaced))
+                    }
+                    let meta = trackMetaLine(track)
+                    if !meta.isEmpty {
+                      Text(meta)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 20)
+                    }
+                  }
+                }
+                if let bw = bufferWindow {
+                  Divider()
+                  HStack {
+                    Text("Buffer")
                       .font(.system(size: 10))
                       .foregroundStyle(.secondary)
-                      .frame(width: 14)
-                    Text(summary)
-                      .font(.system(size: 11, design: .monospaced))
+                    Spacer()
+                    Text(String(format: "%.1fs", Double(bw) / 1000.0))
+                      .font(.system(size: 10, weight: .medium, design: .rounded))
+                  }
+                }
+              }
+            }
+          }
+
+          if isOnline {
+            let streamClients = (appState.clientsByStream[streamName] ?? [])
+              .filter { !($0.info["protocol"] as? String ?? "").hasPrefix("INPUT:") }
+            if !streamClients.isEmpty {
+              GroupBox("Connected Viewers (\(streamClients.count))") {
+                VStack(alignment: .leading, spacing: 6) {
+                  ForEach(streamClients, id: \.id) { client in
+                    streamViewerRow(client.info)
                   }
                 }
               }
@@ -496,18 +545,32 @@ struct StreamDetailView: View {
     .padding(.vertical, 4)
   }
 
-  private var trackSummaries: [String] {
+  private struct TrackDetail: Identifiable {
+    let id: String
+    let type: String
+    let codec: String
+    let summary: String
+    var avgBitrate: Int?
+    var peakBitrate: Int?
+    var language: String?
+    var jitter: Int?
+    var bFrames: Int?
+    var durationMs: Int?
+  }
+
+  private var parsedTracks: [TrackDetail] {
     guard let meta = streamInfo["meta"] as? [String: Any],
           let tracks = meta["tracks"] as? [String: Any]
     else { return [] }
 
-    var summaries: [String] = []
-    for (_, value) in tracks.sorted(by: { $0.key < $1.key }) {
+    var result: [TrackDetail] = []
+    for (key, value) in tracks.sorted(by: { $0.key < $1.key }) {
       guard let track = value as? [String: Any],
             let type = track["type"] as? String,
             let codec = track["codec"] as? String
       else { continue }
 
+      let summary: String
       switch type.lowercased() {
       case "video":
         let w = track["width"] as? Int ?? 0
@@ -515,18 +578,112 @@ struct StreamDetailView: View {
         let fps = track["fpks"] as? Int ?? (track["fps"] as? Int ?? 0)
         let fpsStr = fps > 0 ? " \(fps > 100 ? fps / 1000 : fps)fps" : ""
         let res = w > 0 && h > 0 ? " \(w)x\(h)" : ""
-        summaries.append("Video: \(codec)\(res)\(fpsStr)")
+        summary = "Video: \(codec)\(res)\(fpsStr)"
       case "audio":
         let rate = track["rate"] as? Int ?? 0
         let channels = track["channels"] as? Int ?? 0
         let rateStr = rate > 0 ? " \(rate / 1000)kHz" : ""
         let chStr = channels == 1 ? " mono" : channels == 2 ? " stereo" : channels > 0 ? " \(channels)ch" : ""
-        summaries.append("Audio: \(codec)\(rateStr)\(chStr)")
+        summary = "Audio: \(codec)\(rateStr)\(chStr)"
       default:
-        summaries.append("\(type.capitalized): \(codec)")
+        summary = "\(type.capitalized): \(codec)"
+      }
+
+      let firstMs = track["firstms"] as? Int ?? 0
+      let lastMs = track["lastms"] as? Int ?? 0
+      let duration = lastMs > firstMs ? lastMs - firstMs : nil
+
+      var detail = TrackDetail(
+        id: key, type: type, codec: codec, summary: summary,
+        avgBitrate: track["bps"] as? Int,
+        peakBitrate: track["maxbps"] as? Int,
+        language: track["lang"] as? String,
+        jitter: track["jitter"] as? Int,
+        bFrames: track["bframes"] as? Int,
+        durationMs: duration
+      )
+      if let lang = detail.language, lang.isEmpty { detail.language = nil }
+      result.append(detail)
+    }
+    return result
+  }
+
+  private var bufferWindow: Int? {
+    guard let meta = streamInfo["meta"] as? [String: Any],
+          let source = meta["source"] as? [String: Any],
+          let bw = source["buffer_window"] as? Int, bw > 0
+    else { return nil }
+    return bw
+  }
+
+  private func streamViewerRow(_ info: [String: Any]) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      HStack {
+        Text(info["host"] as? String ?? "Unknown")
+          .font(.system(size: 11, design: .monospaced))
+          .lineLimit(1)
+        Spacer()
+        Text(info["protocol"] as? String ?? "?")
+          .font(.system(size: 9, weight: .medium))
+          .padding(.horizontal, 5)
+          .padding(.vertical, 1)
+          .background(Color.tnAccent.opacity(0.1))
+          .clipShape(Capsule())
+      }
+      HStack(spacing: 8) {
+        if let conntime = info["conntime"] as? Int {
+          let elapsed = Int(Date().timeIntervalSince1970) - conntime
+          Text(DataProcessor.shared.formatDuration(elapsed))
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+        }
+        if let downbps = info["downbps"] as? Int, downbps > 0 {
+          Text(DataProcessor.shared.formatBandwidth(downbps))
+            .font(.system(size: 10, design: .rounded))
+            .foregroundStyle(Color.tnAccent)
+        }
+        if let down = info["down"] as? Int, down > 0 {
+          Text(DataProcessor.shared.formatBytes(down))
+            .font(.system(size: 10))
+            .foregroundStyle(.tertiary)
+        }
+        if let lost = info["pktlost"] as? Int, lost > 0 {
+          Text("\(lost) lost")
+            .font(.system(size: 10))
+            .foregroundStyle(Color.tnRed)
+        }
+        if let retrans = info["pktretransmit"] as? Int, retrans > 0 {
+          Text("\(retrans) retrans")
+            .font(.system(size: 10))
+            .foregroundStyle(Color.tnOrange)
+        }
+        Spacer()
       }
     }
-    return summaries
+    .padding(.vertical, 2)
+  }
+
+  private func trackMetaLine(_ track: TrackDetail) -> String {
+    var parts: [String] = []
+    if let bps = track.avgBitrate, bps > 0 {
+      parts.append("Avg: \(DataProcessor.shared.formatBandwidth(bps))")
+    }
+    if let peak = track.peakBitrate, peak > 0 {
+      parts.append("Peak: \(DataProcessor.shared.formatBandwidth(peak))")
+    }
+    if let lang = track.language {
+      parts.append(lang)
+    }
+    if let jitter = track.jitter, jitter > 0 {
+      parts.append("Jitter: \(jitter)ms")
+    }
+    if let bf = track.bFrames, bf > 0 {
+      parts.append("B-frames")
+    }
+    if let dur = track.durationMs, dur > 0 {
+      parts.append(DataProcessor.shared.formatDuration(dur / 1000))
+    }
+    return parts.joined(separator: " | ")
   }
 }
 
@@ -716,6 +873,11 @@ struct StatisticsView: View {
             activeStreamsSection
           }
 
+          // Top viewers
+          if !appState.connectedClients.isEmpty {
+            topViewersSection
+          }
+
           // System info
           if appState.serverRunning {
             systemSection
@@ -813,6 +975,7 @@ struct StatisticsView: View {
     let viewerProtocols = appState.clientProtocolCounts
       .filter { !$0.key.hasPrefix("INPUT:") }
       .sorted { $0.value > $1.value }
+    let protoBW = appState.clientProtocolBandwidth
 
     return GroupBox("Viewers by Protocol") {
       VStack(spacing: 6) {
@@ -827,9 +990,16 @@ struct StatisticsView: View {
               total: Double(max(appState.viewerCount, 1))
             )
             .tint(.tnAccent)
-            Text("\(count)")
-              .font(.system(.caption, design: .rounded, weight: .semibold))
-              .frame(width: 30, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 1) {
+              Text("\(count)")
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+              if let bw = protoBW[proto], bw > 0 {
+                Text(DataProcessor.shared.formatBandwidth(bw))
+                  .font(.system(size: 9))
+                  .foregroundStyle(.tertiary)
+              }
+            }
+            .frame(width: 60, alignment: .trailing)
           }
         }
 
@@ -923,6 +1093,51 @@ struct StatisticsView: View {
                 .foregroundStyle(.secondary)
             }
           }
+        }
+      }
+    }
+  }
+
+  // MARK: - Top Viewers
+
+  private var topViewersSection: some View {
+    let allViewers = appState.connectedClients.values
+      .compactMap { $0 as? [String: Any] }
+      .filter { !($0["protocol"] as? String ?? "").hasPrefix("INPUT:") }
+      .sorted { ($0["downbps"] as? Int ?? 0) > ($1["downbps"] as? Int ?? 0) }
+    let topN = Array(allViewers.prefix(10))
+
+    return GroupBox("Top Viewers") {
+      VStack(alignment: .leading, spacing: 4) {
+        ForEach(Array(topN.enumerated()), id: \.offset) { _, viewer in
+          HStack(spacing: 6) {
+            Text(viewer["host"] as? String ?? "?")
+              .font(.system(size: 11, design: .monospaced))
+              .lineLimit(1)
+            Spacer()
+            if let stream = viewer["stream"] as? String {
+              Text(stream)
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            }
+            Text(viewer["protocol"] as? String ?? "?")
+              .font(.system(size: 9, weight: .medium))
+              .padding(.horizontal, 4)
+              .padding(.vertical, 1)
+              .background(Color.tnAccent.opacity(0.1))
+              .clipShape(Capsule())
+            Text(DataProcessor.shared.formatBandwidth(viewer["downbps"] as? Int ?? 0))
+              .font(.system(size: 10, design: .rounded))
+              .foregroundStyle(.secondary)
+              .frame(width: 65, alignment: .trailing)
+          }
+        }
+        if allViewers.count > 10 {
+          Text("and \(allViewers.count - 10) more...")
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
       }
     }
