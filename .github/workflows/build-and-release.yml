@@ -141,6 +141,12 @@ jobs:
                          -imagekey zlib-level=9 \
                          "$APP_NAME-$VERSION.dmg"
 
+          # Sign the DMG
+          codesign --force --options runtime --timestamp \
+            --sign "Developer ID Application: ${{ secrets.DEVELOPER_ID }}" \
+            "$APP_NAME-$VERSION.dmg"
+          codesign --verify --verbose=2 "$APP_NAME-$VERSION.dmg"
+
           shasum -a 256 "$APP_NAME-$VERSION.zip" > "$APP_NAME-$VERSION.zip.sha256"
           shasum -a 256 "$APP_NAME-$VERSION.dmg" > "$APP_NAME-$VERSION.dmg.sha256"
 
