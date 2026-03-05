@@ -110,9 +110,22 @@ class MistServerManager {
   }
 
   func isPortListening(_ port: Int) -> Bool {
-    let output = runShellCommandWithOutput(
-      "/usr/sbin/lsof", arguments: ["-i", ":\(port)", "-sTCP:LISTEN"])
-    return output.contains("LISTEN")
+    // Direct TCP connect — works regardless of process owner (root vs user)
+    var addr = sockaddr_in()
+    addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = UInt16(port).bigEndian
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let sock = socket(AF_INET, SOCK_STREAM, 0)
+    guard sock >= 0 else { return false }
+    defer { Darwin.close(sock) }
+    var tv = timeval(tv_sec: 1, tv_usec: 0)
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    return withUnsafePointer(to: &addr) { ptr in
+      ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+        Darwin.connect(sock, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    } == 0
   }
 
   // MARK: - LaunchAgent Plist
