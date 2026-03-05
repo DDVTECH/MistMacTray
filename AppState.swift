@@ -13,6 +13,7 @@ class AppState {
   var needsAuth = false
   var authError: String?
   var serverMode: ServerMode = .notFound
+  var discoveredInstallations: [MistInstallation] = []
 
   var serverURL: String = UserDefaults.standard.string(forKey: "ServerURL") ?? "http://localhost:4242" {
     didSet {

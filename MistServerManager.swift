@@ -3,11 +3,12 @@
 //  MistTray
 //
 
+import AppKit
 import Foundation
 
 // MARK: - Server Mode
 
-enum ServerMode: Equatable {
+enum ServerMode: Equatable, Hashable {
   case brew                // Managed by Homebrew (brew services start/stop/restart)
   case binary(String)      // Binary found at path, run directly
   case external            // API responding on 4242 but no binary found (dev env, Docker, etc.)
@@ -46,6 +47,13 @@ enum ServerMode: Equatable {
   }
 }
 
+struct MistInstallation: Equatable, Hashable, Identifiable {
+  var id: String { key }
+  let key: String      // "brew", "binary:/usr/local/bin/MistController", etc.
+  let mode: ServerMode
+  let label: String    // "Homebrew", "PKG Install", etc.
+}
+
 class MistServerManager {
   static let shared = MistServerManager()
 
@@ -73,6 +81,72 @@ class MistServerManager {
     }
 
     return .notFound
+  }
+
+  // MARK: - Multi-Installation Discovery
+
+  func detectAllInstallations() -> [MistInstallation] {
+    var installations: [MistInstallation] = []
+    let brewRegistered = isBrewServiceRegistered()
+    let isArmBrew = findBrew() == "/opt/homebrew/bin/brew"
+
+    // Check Homebrew
+    if brewRegistered {
+      installations.append(MistInstallation(
+        key: "brew", mode: .brew, label: "Homebrew"))
+    }
+
+    // Check binary paths
+    if let custom = UserDefaults.standard.string(forKey: "CustomBinaryPath"),
+       !custom.isEmpty,
+       FileManager.default.isExecutableFile(atPath: custom) {
+      installations.append(MistInstallation(
+        key: "binary:\(custom)", mode: .binary(custom), label: "Custom (\(custom))"))
+    }
+
+    let knownPaths: [(path: String, label: String, skipIfBrew: Bool)] = [
+      ("/opt/homebrew/bin/MistController", "Homebrew (ARM)", true),
+      ("/usr/local/bin/MistController", isArmBrew ? "PKG Install" : "Homebrew (Intel)", !isArmBrew),
+      ("/usr/bin/MistController", "System", false),
+    ]
+
+    for entry in knownPaths {
+      // Skip paths already managed by brew
+      if entry.skipIfBrew && brewRegistered { continue }
+      if FileManager.default.isExecutableFile(atPath: entry.path) {
+        let key = "binary:\(entry.path)"
+        if !installations.contains(where: { $0.key == key }) {
+          installations.append(MistInstallation(
+            key: key, mode: .binary(entry.path), label: entry.label))
+        }
+      }
+    }
+
+    // Check for external instance (port 4242 responding, no binary found)
+    if installations.isEmpty && isPortListening(4242) {
+      installations.append(MistInstallation(
+        key: "external", mode: .external, label: "External"))
+    }
+
+    return installations
+  }
+
+  func resolveActiveMode(
+    installations: [MistInstallation], preference: String?
+  ) -> ServerMode {
+    if let pref = preference,
+       let match = installations.first(where: { $0.key == pref }) {
+      return match.mode
+    }
+    return installations.first?.mode ?? .notFound
+  }
+
+  func loadPreferredInstallation() -> String? {
+    UserDefaults.standard.string(forKey: "PreferredInstallation")
+  }
+
+  func savePreferredInstallation(_ key: String) {
+    UserDefaults.standard.set(key, forKey: "PreferredInstallation")
   }
 
   func isBrewServiceRegistered() -> Bool {
@@ -128,7 +202,9 @@ class MistServerManager {
     } == 0
   }
 
-  // MARK: - LaunchAgent Plist
+  // MARK: - LaunchAgent / LaunchDaemon Plist
+
+  private let systemDaemonPlistPath = "/Library/LaunchDaemons/com.ddvtech.mistserver.plist"
 
   func launchAgentPlistPath() -> String {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -137,6 +213,10 @@ class MistServerManager {
 
   func hasLaunchAgentPlist() -> Bool {
     FileManager.default.fileExists(atPath: launchAgentPlistPath())
+  }
+
+  func hasSystemLaunchDaemon() -> Bool {
+    FileManager.default.fileExists(atPath: systemDaemonPlistPath)
   }
 
   // MARK: - Config File Detection
@@ -193,6 +273,14 @@ class MistServerManager {
       if hasLaunchAgentPlist() {
         let output = runShellCommandWithOutput("/bin/launchctl", arguments: ["list"])
         if output.contains(launchAgentLabel) {
+          return true
+        }
+      }
+      if hasSystemLaunchDaemon() {
+        // Check if the system daemon is loaded (doesn't require root to query)
+        let output = runShellCommandWithOutput(
+          "/bin/launchctl", arguments: ["print", "system/\(launchAgentLabel)"])
+        if !output.isEmpty && !output.contains("Could not find service") {
           return true
         }
       }
@@ -358,7 +446,7 @@ class MistServerManager {
 
   private func startServerBinary(path: String, completion: @escaping (Bool) -> Void) {
     if hasLaunchAgentPlist() {
-      // Use launchctl to load the plist (handles KeepAlive properly)
+      // User-level LaunchAgent (PKG interactive install or manual setup)
       let plistPath = launchAgentPlistPath()
       DispatchQueue.global(qos: .userInitiated).async { [weak self] in
         let result = self?.runShellCommand("/bin/launchctl", arguments: ["load", plistPath]) ?? -1
@@ -368,6 +456,9 @@ class MistServerManager {
           completion(success)
         }
       }
+    } else if hasSystemLaunchDaemon() {
+      // System-level LaunchDaemon (PKG headless install) — needs admin privileges
+      startSystemDaemon(completion: completion)
     } else {
       // Run binary directly with config path
       ensureConfigDirectory()
@@ -397,7 +488,7 @@ class MistServerManager {
 
   private func stopServerBinary(completion: @escaping (Bool) -> Void) {
     if hasLaunchAgentPlist() {
-      // Use launchctl to unload (prevents KeepAlive auto-restart)
+      // User-level LaunchAgent — no admin needed
       let plistPath = launchAgentPlistPath()
       DispatchQueue.global(qos: .userInitiated).async { [weak self] in
         let result = self?.runShellCommand("/bin/launchctl", arguments: ["unload", plistPath]) ?? -1
@@ -411,9 +502,44 @@ class MistServerManager {
           }
         }
       }
+    } else if hasSystemLaunchDaemon() {
+      // System-level LaunchDaemon — needs admin privileges
+      stopSystemDaemon(completion: completion)
     } else {
       // API graceful shutdown, then pkill fallback
       stopServerViaAPI(completion: completion)
+    }
+  }
+
+  // MARK: - System LaunchDaemon Management (requires admin)
+
+  private func startSystemDaemon(completion: @escaping (Bool) -> Void) {
+    let plistPath = systemDaemonPlistPath
+    let script = "do shell script \"launchctl load \(plistPath)\" with administrator privileges"
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let result = self?.runShellCommand("/usr/bin/osascript", arguments: ["-e", script]) ?? -1
+      DispatchQueue.main.async {
+        let success = result == 0
+        print("[MistServerManager] System daemon start: \(success ? "success" : "failed")")
+        completion(success)
+      }
+    }
+  }
+
+  private func stopSystemDaemon(completion: @escaping (Bool) -> Void) {
+    let plistPath = systemDaemonPlistPath
+    let script = "do shell script \"launchctl unload \(plistPath)\" with administrator privileges"
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let result = self?.runShellCommand("/usr/bin/osascript", arguments: ["-e", script]) ?? -1
+      DispatchQueue.main.async {
+        if result == 0 {
+          print("[MistServerManager] System daemon stop succeeded")
+          completion(true)
+        } else {
+          print("[MistServerManager] System daemon stop failed, trying API shutdown")
+          self?.stopServerViaAPI(completion: completion)
+        }
+      }
     }
   }
 
@@ -625,6 +751,9 @@ class MistServerManager {
         return
       }
 
+      // Remove quarantine attribute (app is notarized, Gatekeeper still validates)
+      self.runShellCommand("/usr/bin/xattr", arguments: ["-cr", newApp.path])
+
       // Verify codesign identity matches
       let currentApp = Bundle.main.bundlePath
       let currentAuthority = self.codesignAuthority(currentApp)
@@ -636,6 +765,18 @@ class MistServerManager {
         print("[Update] Codesign mismatch: current=\(currentAuthority), new=\(newAuthority)")
         try? FileManager.default.removeItem(at: tempDir)
         DispatchQueue.main.async { completion(false) }
+        return
+      }
+
+      // Check write permission to app directory
+      let appDir = URL(fileURLWithPath: currentApp).deletingLastPathComponent().path
+      if !FileManager.default.isWritableFile(atPath: appDir) {
+        print("[Update] No write permission to \(appDir), opening download in browser")
+        try? FileManager.default.removeItem(at: tempDir)
+        DispatchQueue.main.async {
+          NSWorkspace.shared.open(url)
+          completion(false)
+        }
         return
       }
 

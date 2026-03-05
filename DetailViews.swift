@@ -1623,14 +1623,40 @@ struct SettingsView: View {
             .onChange(of: showNotifications) { hasChanges = true }
         }
 
-        Section {
-          HStack {
-            Text("Mode:")
-              .foregroundStyle(.secondary)
-            Text(appState.serverMode.description)
+        if appState.discoveredInstallations.count > 1 {
+          Section("Server Installation") {
+            Picker("Active Installation", selection: Binding(
+              get: {
+                MistServerManager.shared.loadPreferredInstallation()
+                  ?? appState.discoveredInstallations.first?.key ?? ""
+              },
+              set: { newKey in
+                MistServerManager.shared.savePreferredInstallation(newKey)
+                let installations = MistServerManager.shared.detectAllInstallations()
+                appState.discoveredInstallations = installations
+                appState.serverMode = MistServerManager.shared.resolveActiveMode(
+                  installations: installations, preference: newKey)
+              }
+            )) {
+              ForEach(appState.discoveredInstallations) { install in
+                Text(install.label).tag(install.key)
+              }
+            }
+            .pickerStyle(.inline)
+            .font(.caption)
           }
-          .font(.caption)
+        } else {
+          Section("Server Installation") {
+            HStack {
+              Text("Mode:")
+                .foregroundStyle(.secondary)
+              Text(appState.serverMode.description)
+            }
+            .font(.caption)
+          }
+        }
 
+        Section {
           VStack(alignment: .leading, spacing: 4) {
             Text("Custom Binary Path")
               .font(.caption.weight(.medium))
@@ -1746,8 +1772,12 @@ struct SettingsView: View {
     UserDefaults.standard.set(customBinaryPath.trimmed, forKey: "CustomBinaryPath")
     UserDefaults.standard.set(customConfigPath.trimmed, forKey: "CustomConfigPath")
     hasChanges = false
-    // Re-detect mode after path changes
-    appState.serverMode = MistServerManager.shared.detectServerMode()
+    // Re-detect installations after path changes
+    let installations = MistServerManager.shared.detectAllInstallations()
+    let preference = MistServerManager.shared.loadPreferredInstallation()
+    appState.discoveredInstallations = installations
+    appState.serverMode = MistServerManager.shared.resolveActiveMode(
+      installations: installations, preference: preference)
   }
 
   private func browseForBinary() {

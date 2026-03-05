@@ -19,6 +19,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   // MARK: - Component Managers
   private let mistServerManager = MistServerManager.shared
 
+  /// Re-detect all installations and resolve active mode
+  func redetectServerMode() {
+    let installations = mistServerManager.detectAllInstallations()
+    let preference = mistServerManager.loadPreferredInstallation()
+    appState.discoveredInstallations = installations
+    appState.serverMode = mistServerManager.resolveActiveMode(
+      installations: installations, preference: preference)
+  }
+
   override init() {
     super.init()
   }
@@ -37,8 +46,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // 1) Create the menu bar icon
     setupStatusBarIcon()
 
-    // 2) Detect server mode and running state
-    appState.serverMode = mistServerManager.detectServerMode()
+    // 2) Detect server installations and resolve active mode
+    let installations = mistServerManager.detectAllInstallations()
+    let preference = mistServerManager.loadPreferredInstallation()
+    appState.discoveredInstallations = installations
+    appState.serverMode = mistServerManager.resolveActiveMode(
+      installations: installations, preference: preference)
     appState.serverRunning = mistServerManager.isMistServerRunning(mode: appState.serverMode)
 
     // 3) Initial data refresh with auth check (capabilities included in main fetch)
@@ -55,11 +68,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // 5) Schedule regular data updates (every 10 seconds)
     activeStreamsTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
       guard let self = self else { return }
-      // Re-detect mode on background queue to avoid blocking main thread
+      // Re-detect installations on background queue to avoid blocking main thread
       DispatchQueue.global(qos: .utility).async {
-        let mode = self.mistServerManager.detectServerMode()
+        let installations = self.mistServerManager.detectAllInstallations()
+        let preference = self.mistServerManager.loadPreferredInstallation()
+        let mode = self.mistServerManager.resolveActiveMode(
+          installations: installations, preference: preference)
         let running = self.mistServerManager.isMistServerRunning(mode: mode)
         DispatchQueue.main.async {
+          self.appState.discoveredInstallations = installations
           self.appState.serverMode = mode
           self.appState.serverRunning = running
           if running {
@@ -283,7 +300,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
           self?.appState.serverRunning = !success
           if success {
             // Re-detect mode after stopping
-            self?.appState.serverMode = self?.mistServerManager.detectServerMode() ?? .notFound
+            self?.redetectServerMode()
           }
         }
       }
@@ -302,7 +319,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async {
           self?.appState.serverRunning = success
           if success {
-            self?.appState.serverMode = self?.mistServerManager.detectServerMode() ?? mode
+            self?.redetectServerMode()
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
               self?.checkAuthAndRefresh()
             }

@@ -383,7 +383,9 @@ struct DashboardView: View {
           appState.serverRunning = !success
           appState.isTogglingServer = false
           if success {
-            appState.serverMode = manager.detectServerMode()
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+              appDelegate.redetectServerMode()
+            }
           }
         }
       }
@@ -404,7 +406,9 @@ struct DashboardView: View {
           appState.serverRunning = success
           appState.isTogglingServer = false
           if success {
-            appState.serverMode = manager.detectServerMode()
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+              appDelegate.redetectServerMode()
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
               refreshData()
             }
