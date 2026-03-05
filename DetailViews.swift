@@ -4,6 +4,7 @@
 //
 
 import Charts
+import ServiceManagement
 import SwiftUI
 
 // MARK: - Stream Detail View
@@ -1529,7 +1530,7 @@ struct AutoPushRulesView: View {
 struct SettingsView: View {
   @Bindable var appState: AppState
 
-  @State private var startOnLaunch: Bool = false
+  @State private var openAtLogin: Bool = false
   @State private var showNotifications: Bool = false
   @State private var customBinaryPath: String = ""
   @State private var customConfigPath: String = ""
@@ -1616,9 +1617,22 @@ struct SettingsView: View {
           }
         }
 
-        Section("Server") {
-          Toggle("Start server on app launch", isOn: $startOnLaunch)
-            .onChange(of: startOnLaunch) { hasChanges = true }
+        Section("App") {
+          Toggle("Open at Login", isOn: $openAtLogin)
+            .onChange(of: openAtLogin) {
+              if #available(macOS 13.0, *) {
+                do {
+                  if openAtLogin {
+                    try SMAppService.mainApp.register()
+                  } else {
+                    try SMAppService.mainApp.unregister()
+                  }
+                } catch {
+                  print("[Settings] Login item toggle failed: \(error)")
+                  openAtLogin = !openAtLogin // revert on failure
+                }
+              }
+            }
           Toggle("Show notifications", isOn: $showNotifications)
             .onChange(of: showNotifications) { hasChanges = true }
         }
@@ -1758,7 +1772,9 @@ struct SettingsView: View {
     .navigationBarBackButtonHidden(true)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .onAppear {
-      startOnLaunch = UserDefaults.standard.bool(forKey: "LaunchAtStartup")
+      if #available(macOS 13.0, *) {
+        openAtLogin = SMAppService.mainApp.status == .enabled
+      }
       showNotifications = UserDefaults.standard.bool(forKey: "ShowNotifications")
       customBinaryPath = UserDefaults.standard.string(forKey: "CustomBinaryPath") ?? ""
       customConfigPath = UserDefaults.standard.string(forKey: "CustomConfigPath") ?? ""
@@ -1767,7 +1783,6 @@ struct SettingsView: View {
   }
 
   private func savePreferences() {
-    UserDefaults.standard.set(startOnLaunch, forKey: "LaunchAtStartup")
     UserDefaults.standard.set(showNotifications, forKey: "ShowNotifications")
     UserDefaults.standard.set(customBinaryPath.trimmed, forKey: "CustomBinaryPath")
     UserDefaults.standard.set(customConfigPath.trimmed, forKey: "CustomConfigPath")
