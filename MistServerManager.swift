@@ -261,28 +261,36 @@ class MistServerManager {
     isPortListening(4242)
   }
 
+  /// Check if a launchctl-managed service has a running process.
+  /// `launchctl list` output format: "PID\tExitStatus\tLabel"
+  /// PID is "-" when the process is not running.
+  private func isLaunchctlServiceRunning(_ label: String) -> Bool {
+    let output = runShellCommandWithOutput("/bin/launchctl", arguments: ["list"])
+    for line in output.components(separatedBy: "\n") {
+      guard line.contains(label) else { continue }
+      let columns = line.split(separator: "\t", maxSplits: 2)
+      // First column is PID — "-" means not running, a number means running
+      if columns.count >= 3, let _ = Int(columns[0]) {
+        return true
+      }
+      return false
+    }
+    return false
+  }
+
   func isMistServerRunning(mode: ServerMode) -> Bool {
     switch mode {
     case .brew:
-      let output = runShellCommandWithOutput("/bin/launchctl", arguments: ["list"])
-      if output.contains("homebrew.mxcl.mistserver") {
+      if isLaunchctlServiceRunning("homebrew.mxcl.mistserver") {
         return true
       }
       return isPortListening(4242)
     case .binary:
-      if hasLaunchAgentPlist() {
-        let output = runShellCommandWithOutput("/bin/launchctl", arguments: ["list"])
-        if output.contains(launchAgentLabel) {
-          return true
-        }
+      if hasLaunchAgentPlist() && isLaunchctlServiceRunning(launchAgentLabel) {
+        return true
       }
-      if hasSystemLaunchDaemon() {
-        // Check if the system daemon is loaded (doesn't require root to query)
-        let output = runShellCommandWithOutput(
-          "/bin/launchctl", arguments: ["print", "system/\(launchAgentLabel)"])
-        if !output.isEmpty && !output.contains("Could not find service") {
-          return true
-        }
+      if hasSystemLaunchDaemon() && isLaunchctlServiceRunning(launchAgentLabel) {
+        return true
       }
       return isPortListening(4242)
     case .external:
@@ -336,13 +344,33 @@ class MistServerManager {
 
   // MARK: - Server Lifecycle (Mode-Aware)
 
+  /// Stop any conflicting service before starting in a different mode.
+  private func stopConflictingServices(startingMode: ServerMode) {
+    switch startingMode {
+    case .brew:
+      // Stop user/system LaunchAgent if loaded
+      if hasLaunchAgentPlist() {
+        runShellCommand("/bin/launchctl", arguments: ["unload", launchAgentPlistPath()])
+      }
+    case .binary:
+      // Stop brew service if running
+      if let brewCmd = findBrew(), isBrewServiceRegistered() {
+        runShellCommand(brewCmd, arguments: ["services", "stop", "mistserver"])
+      }
+    default:
+      break
+    }
+  }
+
   func startServer(mode: ServerMode, completion: @escaping (Bool) -> Void) {
     print("[MistServerManager] Starting MistServer (mode: \(mode.shortDescription))...")
 
     switch mode {
     case .brew:
+      stopConflictingServices(startingMode: .brew)
       startServerBrew(completion: completion)
     case .binary(let path):
+      stopConflictingServices(startingMode: .binary(path))
       startServerBinary(path: path, completion: completion)
     case .external, .notFound:
       print("[MistServerManager] Cannot start in \(mode.shortDescription) mode")
