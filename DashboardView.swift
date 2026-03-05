@@ -222,6 +222,21 @@ struct DashboardView: View {
         }
         .buttonStyle(.plain)
         .pointerOnHover()
+      } else if case .binary = appState.serverMode {
+        Button {
+          if let url = URL(string: "https://github.com/DDVTECH/mistserver/releases/latest") {
+            NSWorkspace.shared.open(url)
+          }
+        } label: {
+          Text("Download")
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Color.tnAccent.opacity(0.2))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .pointerOnHover()
       }
     }
     .foregroundStyle(Color.tnAccent)
