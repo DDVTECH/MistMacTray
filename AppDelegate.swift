@@ -185,32 +185,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private func setupStatusBarIcon() {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     if let button = statusItem.button {
-      if let originalImage = NSImage(named: "StatusIcon") {
-        let targetSize = NSSize(width: 16, height: 16)
-        let resizedImage = NSImage(size: targetSize)
-
-        resizedImage.lockFocus()
-        let originalSize = originalImage.size
-        let aspectRatio = originalSize.width / originalSize.height
-
-        var drawSize = targetSize
-        if aspectRatio > 1 {
-          drawSize.height = targetSize.width / aspectRatio
-        } else {
-          drawSize.width = targetSize.height * aspectRatio
-        }
-
-        let drawRect = NSRect(
-          x: (targetSize.width - drawSize.width) / 2,
-          y: (targetSize.height - drawSize.height) / 2,
-          width: drawSize.width,
-          height: drawSize.height
-        )
-
-        originalImage.draw(in: drawRect)
-        resizedImage.unlockFocus()
-        resizedImage.isTemplate = true
-        button.image = resizedImage
+      if let image = NSImage(named: "StatusIcon") {
+        let height: CGFloat = 18
+        let aspect = image.size.width / image.size.height
+        image.size = NSSize(width: height * aspect, height: height)
+        image.isTemplate = true
+        button.image = image
       }
       button.toolTip = "MistTray"
 
