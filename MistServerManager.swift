@@ -639,10 +639,10 @@ class MistServerManager {
         return
       }
 
-      // Relaunch new version
-      let executablePath = currentApp + "/Contents/MacOS/MistTray"
+      // Relaunch via open(1) for proper LaunchServices handling
       let relaunchTask = Process()
-      relaunchTask.executableURL = URL(fileURLWithPath: executablePath)
+      relaunchTask.executableURL = URL(fileURLWithPath: "/bin/sh")
+      relaunchTask.arguments = ["-c", "sleep 1 && open '\(currentApp)'"]
       try? relaunchTask.run()
 
       DispatchQueue.main.async { completion(true) }
