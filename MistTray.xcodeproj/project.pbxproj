@@ -338,7 +338,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LSUIElement = YES;
-				MARKETING_VERSION = 0.2.3;
+				MARKETING_VERSION = 0.2.4;
 				NSHighResolutionCapable = YES;
 				NSPrincipalClass = NSApplication;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ddvtech.MistTray;
@@ -371,7 +371,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LSUIElement = YES;
-				MARKETING_VERSION = 0.2.3;
+				MARKETING_VERSION = 0.2.4;
 				NSHighResolutionCapable = YES;
 				NSPrincipalClass = NSApplication;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ddvtech.MistTray;
